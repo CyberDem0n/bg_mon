@@ -34,18 +34,17 @@ static size_t get_dirent_size(int dirfd)
 #endif
 
 	if (name_max < 255) name_max = 255;
+	dirent_size = offsetof(struct dirent, d_name) + name_max + 1;
 
-	if ((dirent_size = offsetof(struct dirent, d_name) + name_max + 1) < sizeof(struct dirent));
-		dirent_size = sizeof(struct dirent);
-
-	return dirent_size;
+	return dirent_size < sizeof(struct dirent) ? sizeof(struct dirent) : dirent_size;
 }
 
 /******************************************************
- * implementation of du -s and du -sx functionality   *
- * works recursively, returns total size in kilobytes *
+ * implementation of du -s and du -sx functionality
+ * works recursively, returns total size in kilobytes
  ******************************************************/
-static unsigned long long du(int dirfd, const char *path, dev_t dev, bool track_device)
+static unsigned long long
+du(int dirfd, const char *path, dev_t dev, bool track_device)
 {
 	struct stat st;
 	unsigned long long ret = 0;
@@ -53,7 +52,7 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, bool track_
 	size_t dirent_size;
 	DIR *dir;
 
-	if (fstatat(dirfd, path, &st, (dirfd == AT_FDCWD) ? 0 : AT_SYMLINK_NOFOLLOW))
+	if (fstatat(dirfd, path, &st, dirfd == AT_FDCWD ? 0 : AT_SYMLINK_NOFOLLOW))
 		return ret;
 
 	if (track_device && !dev) dev = st.st_dev;
@@ -74,7 +73,9 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, bool track_
 	if ((buf = malloc(dirent_size))) {
 		while (readdir_r(dir, buf, &e) == 0 && e != NULL)
 			// skip "." and ".."
-			if (e->d_name[0] != '.' || (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2])))
+			if (e->d_name[0] != '.'
+					|| (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2]))
+					|| !strncmp(e->d_name, "lost+found", 11))
 				ret += du(dirfd, e->d_name, dev, track_device);
 		free(buf);
 	} else elog(ERROR, "Can not allocate %lu bytes for dirent", dirent_size);
