@@ -1,4 +1,5 @@
-MODULES = bg_mon
+MODULE_big = bg_mon
+OBJS = bg_mon.o postgres_stats.o disk_stats.o system_stats.o
 
 EXTENSION = bg_mon
 DATA = bg_mon--0.1.sql
