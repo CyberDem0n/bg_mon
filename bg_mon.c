@@ -1,3 +1,8 @@
+#include <pthread.h>
+#include <event2/event.h>
+#include <event2/http.h>
+#include <event2/buffer.h>
+
 #include "postgres.h"
 
 /* These are always necessary for a bgworker */
@@ -22,6 +27,7 @@ PG_FUNCTION_INFO_V1(bg_mon_launch);
 void _PG_init(void);
 void bg_mon_main(Datum);
 
+pthread_mutex_t lock;
 
 /* flags set by signal handlers */
 static volatile sig_atomic_t got_sighup = false;
@@ -36,24 +42,6 @@ static system_stat system_stats_current;
 
 static void report_stats()
 {
-	size_t i;
-	disk_stat d = diskspace_stats_current;
-	system_stat s = system_stats_current;
-	cpu_stat c = s.cpu;
-	meminfo m = s.mem;
-	elog(LOG, "%s up %d %d cores Linux %s load average %4.6g %4.6g %4.6g", s.hostname, s.uptime, s.cpu.cpu_count, s.sysname, s.load_avg.run_1min, s.load_avg.run_5min, s.load_avg.run_15min);
-	elog(LOG, "sys: utime %2.1f stime %2.1f idle %2.1f iowait %2.1f ctxt %lu run %lu block %lu", c.utime_diff*100, c.stime_diff*100, c.idle_diff*100, c.iowait_diff*100, s.ctxt_diff, s.procs_running, s.procs_blocked);
-	elog(LOG, "mem: total %lu free %lu buffers %lu cached %lu dirty %lu limit %lu as %lu", m.total, m.free, m.buffers, m.cached, m.dirty, m.limit, m.as);
-	elog(LOG, "data %s:%s total %llu left %llu size %llu read %u write %u await %u", d.data_dev, d.data_directory, d.data_size, d.data_free, d.du_data, d.data_read_diff, d.data_write_diff, d.data_time_in_queue_diff);
-	elog(LOG, "xlog %s:%s total %llu left %llu size %llu read %u write %u await %u", d.xlog_dev, d.xlog_directory, d.xlog_size, d.xlog_free, d.du_xlog, d.xlog_read_diff, d.xlog_write_diff, d.xlog_time_in_queue_diff);
-	for (i = 0; i < pg_stats_current.pos; ++i) {
-		pg_stat s = pg_stats_current.values[i];
-		proc_stat ps = s.ps;
-		if (s.is_backend && s.query != NULL)
-			elog(LOG, "%d %s %c %f %f %f %lu %lu %s %s %s", s.pid, "backend", ps.state, ps.utime_diff, ps.stime_diff, ps.guest_time_diff, ps.io.read_bytes_diff, ps.io.write_bytes_diff, s.datname==NULL?"nil":s.datname, s.usename==NULL?"nil":s.usename, s.query);
-		else if (!s.is_backend)
-			elog(LOG, "%d %s %c %f %f %f %lu %lu", s.pid, ps.cmdline==NULL?"unknown":ps.cmdline, ps.state, ps.utime_diff, ps.stime_diff, ps.guest_time_diff, ps.io.read_bytes_diff, ps.io.write_bytes_diff);
-	}
 }
 
 /*
@@ -102,15 +90,98 @@ initialize_bg_mon()
 	system_stats_init();
 }
 
+static void
+send_document_cb(struct evhttp_request *req, void *arg)
+{
+	size_t i;
+	disk_stat d;
+	system_stat s;
+	cpu_stat c;
+	meminfo m;
+
+	struct evbuffer *evb = NULL;
+
+	evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/plain");
+
+	evb = evbuffer_new();
+	pthread_mutex_lock(&lock);
+	d = diskspace_stats_current;
+	s = system_stats_current;
+	c = s.cpu;
+	m = s.mem;
+
+	evbuffer_add_printf(evb, "%s up %d %d cores Linux %s load average %4.6g %4.6g %4.6g\n", s.hostname, s.uptime, s.cpu.cpu_count, s.sysname, s.load_avg.run_1min, s.load_avg.run_5min, s.load_avg.run_15min);
+	evbuffer_add_printf(evb, "sys: utime %2.1f stime %2.1f idle %2.1f iowait %2.1f ctxt %lu run %lu block %lu\n", c.utime_diff*100, c.stime_diff*100, c.idle_diff*100, c.iowait_diff*100, s.ctxt_diff, s.procs_running, s.procs_blocked);
+	evbuffer_add_printf(evb, "mem: total %lu free %lu buffers %lu cached %lu dirty %lu limit %lu as %lu\n", m.total, m.free, m.buffers, m.cached, m.dirty, m.limit, m.as);
+	evbuffer_add_printf(evb, "data %s:%s total %llu left %llu size %llu read %u write %u await %u\n", d.data_dev, d.data_directory, d.data_size, d.data_free, d.du_data, d.data_read_diff, d.data_write_diff, d.data_time_in_queue_diff);
+	evbuffer_add_printf(evb, "xlog %s:%s total %llu left %llu size %llu read %u write %u await %u\n", d.xlog_dev, d.xlog_directory, d.xlog_size, d.xlog_free, d.du_xlog, d.xlog_read_diff, d.xlog_write_diff, d.xlog_time_in_queue_diff);
+	for (i = 0; i < pg_stats_current.pos; ++i) {
+		pg_stat s = pg_stats_current.values[i];
+		proc_stat ps = s.ps;
+		if (s.is_backend && s.query != NULL)
+			evbuffer_add_printf(evb, "%d %s %c %f %f %f %lu %lu %s %s %s\n", s.pid, "backend", ps.state, ps.utime_diff, ps.stime_diff, ps.guest_time_diff, ps.io.read_bytes_diff, ps.io.write_bytes_diff, s.datname==NULL?"nil":s.datname, s.usename==NULL?"nil":s.usename, s.query);
+		else if (!s.is_backend)
+			evbuffer_add_printf(evb, "%d %s %c %f %f %f %lu %lu\n", s.pid, ps.cmdline==NULL?"unknown":ps.cmdline, ps.state, ps.utime_diff, ps.stime_diff, ps.guest_time_diff, ps.io.read_bytes_diff, ps.io.write_bytes_diff);
+	}
+
+	pthread_mutex_unlock(&lock);
+	evhttp_send_reply(req, 200, "OK", evb);
+	evbuffer_free(evb);
+}
+
+static void *webapi(void *arg)
+{
+	struct event_base *base = (struct event_base *)arg;
+
+	event_base_dispatch(base);
+
+	return (void *)0;
+}
+
 void
 bg_mon_main(Datum main_arg)
 {
+	unsigned short port = 8080;
+	pthread_t thread;
 	struct timezone tz;
 	struct timeval current_time, next_run;
+
+	struct event_base *base;
+	struct evhttp *http;
+	struct evhttp_bound_socket *handle;
+
 
 	/* Establish signal handlers before unblocking signals. */
 	pqsignal(SIGHUP, bg_mon_sighup);
 	pqsignal(SIGTERM, bg_mon_sigterm);
+
+	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
+		proc_exit(1);
+
+	if (!(base = event_base_new())) {
+		elog(ERROR, "Couldn't create an event_base: exiting");
+		return proc_exit(1);
+	}
+
+	/* Create a new evhttp object to handle requests. */
+	if (!(http = evhttp_new(base))) {
+		elog(ERROR, "couldn't create evhttp. Exiting.");
+		return proc_exit(1);
+	}
+
+	/* We want to accept arbitrary requests, so we need to set a "generic"
+	 * cb.  We can also add callbacks for specific paths. */
+	evhttp_set_gencb(http, send_document_cb, NULL);
+
+	/* Now we tell the evhttp what port to listen on */
+	if (!(handle = evhttp_bind_socket_with_handle(http, "0.0.0.0", port))) {
+		elog(ERROR, "couldn't bind to port %d. Exiting.\n", (int)port);
+		return proc_exit(1);
+	}
+
+	pthread_mutex_init(&lock, NULL);
+
+	pthread_create(&thread, NULL, webapi, base);
 
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
@@ -158,9 +229,19 @@ bg_mon_main(Datum main_arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		diskspace_stats_current = get_diskspace_stats();
-		pg_stats_current = get_postgres_stats();
-		system_stats_current = get_system_stats();
+		{
+			disk_stat d =  get_diskspace_stats();
+			pg_stat_list p = get_postgres_stats();
+			system_stat s = get_system_stats();
+
+			pthread_mutex_lock(&lock);
+
+			diskspace_stats_current = d;
+			pg_stats_current = p;
+			system_stats_current = s;
+
+			pthread_mutex_unlock(&lock);
+		}
 
 		report_stats();
 	}

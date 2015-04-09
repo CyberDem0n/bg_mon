@@ -51,6 +51,9 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 			FREE(ps.datname);
 			FREE(ps.locked_by);
 		}
+
+		if (ps.ps.free_cmdline)
+			FREE(ps.ps.cmdline);
 	}
 	list->pos = 0;
 }
@@ -236,7 +239,6 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 			pg_stat pgs = {0,};
 			pgs.ps = proc_stats.values[proc_stats_pos];
 			pgs.pid = pgs.ps.pid;
-			/* TODO: read cmdline from proc */
 			pg_stat_list_add(pg_stats, pgs);
 			++proc_stats_pos;
 		} else if (pg_stats->values[pg_stats_pos].pid == proc_stats.values[proc_stats_pos].pid) {
@@ -295,16 +297,17 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 
 	while (old_pos < old_stats.pos || new_pos < new_stats.pos) {
 		if (new_pos >= new_stats.pos)
-			FREE(old_stats.values[old_pos++].ps.cmdline);
+			old_stats.values[old_pos++].ps.free_cmdline = true;
 		else if (old_pos >= old_stats.pos) {
 			if (!new_stats.values[new_pos].is_backend)
 				new_stats.values[new_pos].ps.cmdline = read_proc_cmdline(new_stats.values[new_pos].pid);
 			++new_pos;
 		} else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
-			if (new_stats.values[new_pos].is_backend) FREE(old_stats.values[old_pos++].ps.cmdline);
+			if (new_stats.values[new_pos].is_backend)
+				old_stats.values[old_pos].ps.free_cmdline = true;
 			else {
 				if (old_stats.values[old_pos].is_backend)
-					FREE(old_stats.values[old_pos].ps.cmdline);
+					old_stats.values[old_pos].ps.free_cmdline = true;
 
 				if (old_stats.values[old_pos].ps.cmdline != NULL)
 					new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
@@ -317,7 +320,7 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 				new_stats.values[new_pos].ps.cmdline = read_proc_cmdline(new_stats.values[new_pos].pid);
 			++new_pos;
 		} else // old.pid < new.pid
-			FREE(old_stats.values[old_pos++].ps.cmdline);
+			old_stats.values[old_pos++].ps.free_cmdline = true;
 	}
 }
 
@@ -383,6 +386,7 @@ pg_stat_list get_postgres_stats(void)
 
 	read_procfs(PostmasterPid, &proc_stats);
 
+	pg_stat_list_free_resources(&pg_stats_new);
 	get_pg_stat_activity(&pg_stats_new);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
@@ -392,7 +396,6 @@ pg_stat_list get_postgres_stats(void)
 
 	pg_stats_tmp = pg_stats_current;
 	pg_stats_current = pg_stats_new;
-	pg_stat_list_free_resources(&pg_stats_tmp);
 	pg_stats_new = pg_stats_tmp;
 
 	return pg_stats_current;

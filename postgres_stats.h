@@ -28,6 +28,7 @@ typedef struct {
 	double guest_time_diff;
 	unsigned long long uss;
 	char *cmdline;
+	bool free_cmdline;
 	proc_io io;
 } proc_stat;
 
