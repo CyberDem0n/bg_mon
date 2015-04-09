@@ -139,6 +139,44 @@ static void free_mounts(List *mounts)
 	list_free_deep(mounts);
 }
 
+static char *resolve_dm_name(char *mapper_name)
+{
+	static char dm_name[NAME_MAX];
+	struct dirent buf, *e;
+	DIR *dir = opendir("/sys/block");
+
+	if (dir == NULL) return mapper_name;
+
+	while (readdir_r(dir, &buf, &e) == 0 && e != NULL)
+		if (e->d_name[0] != '.' || (e->d_name[1]
+				&& (e->d_name[1] != '.' || e->d_name[2]))) {
+			int fd, dfd = dirfd(dir);
+			size_t r = 0;
+
+			if (dfd == -1 || (dfd = openat(dfd, e->d_name,
+					O_RDONLY|O_NOCTTY|O_DIRECTORY)) == -1)
+				continue;
+
+			if ((fd = openat(dfd, "dm/name", O_RDONLY|O_NOCTTY)) != -1) {
+				r = read(fd, dm_name, sizeof(dm_name) - 1);
+				close(fd);
+			}
+			close(dfd);
+
+			while (r > 0 && (dm_name[r - 1] == '\r' || dm_name[r - 1] == '\n'))
+				dm_name[--r] = '\0';
+
+			if (r > 0 && strncmp(mapper_name, dm_name, r) == 0) {
+				strcpy(dm_name, e->d_name);
+				closedir(dir);
+				return dm_name;
+			}
+		}
+
+	closedir(dir);
+	return mapper_name;
+}
+
 static char *get_device(List *mounts, const char *path)
 {
 	ListCell *lc;
@@ -197,6 +235,9 @@ static char *get_device(List *mounts, const char *path)
 		}
 
 	if (!best_match) return NULL;
+
+	if (strncmp(best_match->me_devname, "/dev/mapper/", 12) == 0)
+		return resolve_dm_name(best_match->me_devname + 12);
 
 	if (strncmp(best_match->me_devname, "/dev/", 5) == 0)
 		return best_match->me_devname + 5;
