@@ -4,9 +4,9 @@
 typedef struct {
 	bool available;
 	unsigned long long read_bytes;
-	unsigned long read_bytes_diff;
+	unsigned long read_diff;
 	unsigned long long write_bytes;
-	unsigned long write_bytes_diff;
+	unsigned long write_diff;
 } proc_io;
 
 typedef struct {
@@ -49,6 +49,8 @@ typedef struct {
 	size_t size;
 	size_t pos;
 	struct timeval time;
+	int total_connections;
+	int active_connections;
 } pg_stat_list;
 
 void postgres_stats_init(void);

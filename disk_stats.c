@@ -276,15 +276,19 @@ static void diff_disk_stats(disk_stat *new_stats)
 {
 	double time_diff;
 	if (disk_stats_old.time.tv_sec == 0) return;
-	time_diff = (double)new_stats->time.tv_sec + (double)new_stats->time.tv_usec/1000000.0 -
-		(double)disk_stats_old.time.tv_sec - (double)disk_stats_old.time.tv_usec/1000000.0;
-	new_stats->data_read_diff = (double)(new_stats->data_sectors_read - disk_stats_old.data_sectors_read)/2.0/time_diff;
-	new_stats->data_write_diff = (double)(new_stats->data_sectors_written - disk_stats_old.data_sectors_written)/2.0/time_diff;
-	new_stats->data_time_in_queue_diff = (double)(new_stats->data_time_in_queue - disk_stats_old.data_time_in_queue)/time_diff;
+	time_diff = new_stats->time.tv_sec + new_stats->time.tv_usec/1000000.0 -
+		disk_stats_old.time.tv_sec - disk_stats_old.time.tv_usec/1000000.0;
 
-	new_stats->xlog_read_diff = (double)(new_stats->xlog_sectors_read - disk_stats_old.xlog_sectors_read)/2.0/time_diff;
-	new_stats->xlog_write_diff = (double)(new_stats->xlog_sectors_written - disk_stats_old.xlog_sectors_written)/2.0/time_diff;
-	new_stats->xlog_time_in_queue_diff = (double)(new_stats->xlog_time_in_queue - disk_stats_old.xlog_time_in_queue)/time_diff;
+	new_stats->data_time_in_queue_diff = (new_stats->data_time_in_queue - disk_stats_old.data_time_in_queue)/time_diff;
+	new_stats->xlog_time_in_queue_diff = (new_stats->xlog_time_in_queue - disk_stats_old.xlog_time_in_queue)/time_diff;
+
+	time_diff *= 2.0;
+
+	new_stats->data_read_diff = (new_stats->data_sectors_read - disk_stats_old.data_sectors_read)/time_diff;
+	new_stats->data_write_diff = (new_stats->data_sectors_written - disk_stats_old.data_sectors_written)/time_diff;
+
+	new_stats->xlog_read_diff = (new_stats->xlog_sectors_read - disk_stats_old.xlog_sectors_read)/time_diff;
+	new_stats->xlog_write_diff = (new_stats->xlog_sectors_written - disk_stats_old.xlog_sectors_written)/time_diff;
 }
 
 disk_stat get_diskspace_stats(void)

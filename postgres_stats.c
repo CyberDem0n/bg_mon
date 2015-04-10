@@ -278,12 +278,16 @@ static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, double ti
 	proc_stat *o = &old_stat->ps;
 	proc_stat *n = &new_stat->ps;
 	if (n->fields < 9) return;
-	n->utime_diff = (double)(n->utime - o->utime)/SC_CLK_TCK/time_diff;
-	n->stime_diff = (double)(n->stime - o->stime)/SC_CLK_TCK/time_diff;
-	n->guest_time_diff = (double)(n->guest_time - o->guest_time)/SC_CLK_TCK/time_diff;
+
 	n->delayacct_blkio_ticks_diff = (n->delayacct_blkio_ticks - o->delayacct_blkio_ticks)/time_diff;
-	n->io.read_bytes_diff = (n->io.read_bytes - o->io.read_bytes)/time_diff;
-	n->io.write_bytes_diff = (n->io.write_bytes - o->io.write_bytes)/time_diff;
+	n->io.read_diff = (n->io.read_bytes - o->io.read_bytes)/time_diff/1024;
+	n->io.write_diff = (n->io.write_bytes - o->io.write_bytes)/time_diff/1024;
+
+	time_diff *= SC_CLK_TCK;
+
+	n->utime_diff = (n->utime - o->utime)/time_diff;
+	n->stime_diff = (n->stime - o->stime)/time_diff;
+	n->guest_time_diff = (n->guest_time - o->guest_time)/time_diff;
 }
 
 static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
@@ -292,8 +296,8 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 	size_t old_pos = 0, new_pos = 0;
 
 	if (old_stats.time.tv_sec == 0) return;
-	time_diff = (double)new_stats.time.tv_sec + (double)new_stats.time.tv_usec/1000000.0 -
-				(double)old_stats.time.tv_sec - (double)old_stats.time.tv_usec/1000000.0;
+	time_diff = new_stats.time.tv_sec + new_stats.time.tv_usec/1000000.0 -
+				old_stats.time.tv_sec - old_stats.time.tv_usec/1000000.0;
 
 	while (old_pos < old_stats.pos || new_pos < new_stats.pos) {
 		if (new_pos >= new_stats.pos)
@@ -342,6 +346,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	if (ret != SPI_OK_SELECT)
 		elog(FATAL, "cannot select from pg_stat_activity: error code %d", ret);
 
+	pg_stats->total_connections = SPI_processed + 1;
+	pg_stats->active_connections = 0;
+
 	if (SPI_processed > 0)
 	{
 		int a;
@@ -362,6 +369,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				if (isnull) ps.age = -1;
 				ps.is_waiting = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 7, &isnull)); 
 				ps.locked_by = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 8);
+				pg_stats->active_connections++;
 			} else FREE(ps.query);
 
 			ps.is_backend = true;

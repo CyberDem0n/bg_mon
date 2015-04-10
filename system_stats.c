@@ -81,9 +81,9 @@ static meminfo read_meminfo(void)
 				if (sscanf(dpos + sizeof(delimiter) - 1, "%lu %s", mem_tab[j].value, unit) == 2) {
 					if (unit[1] == 'B') {
 						if (unit[0] == 'g')
-							*mem_tab[j].value *= 1000000;
+							*mem_tab[j].value *= 1048576;
 						else if (unit[0] == 'm')
-							*mem_tab[j].value *= 1000;
+							*mem_tab[j].value *= 1024;
 					}
 					mi.available = 1;
 				}
@@ -142,20 +142,20 @@ static void diff_system_stats(system_stat *new_stats)
 {
 	double time_diff;
 	if (system_stats_old.time.tv_sec == 0) return;
-	time_diff = (double)new_stats->time.tv_sec + (double)new_stats->time.tv_usec/1000000.0 -
-		(double)system_stats_old.time.tv_sec - (double)system_stats_old.time.tv_usec/1000000.0;
+	time_diff = new_stats->time.tv_sec + new_stats->time.tv_usec/1000000.0 -
+		system_stats_old.time.tv_sec - system_stats_old.time.tv_usec/1000000.0;
 
-	new_stats->ctxt_diff = (double)(new_stats->ctxt - system_stats_old.ctxt)/time_diff;
+	new_stats->ctxt_diff = (new_stats->ctxt - system_stats_old.ctxt)/time_diff;
 
 	time_diff = (new_stats->cpu.total - system_stats_old.cpu.total)/100.0;
-	new_stats->cpu.utime_diff = (double)(new_stats->cpu.utime - system_stats_old.cpu.utime)/time_diff;
-	new_stats->cpu.stime_diff = (double)(new_stats->cpu.stime - system_stats_old.cpu.stime)/time_diff;
-	new_stats->cpu.idle_diff = (double)(new_stats->cpu.idle - system_stats_old.cpu.idle)/time_diff;
-	new_stats->cpu.iowait_diff = (double)(new_stats->cpu.iowait - system_stats_old.cpu.iowait)/time_diff;
-	new_stats->cpu.irq_diff = (double)(new_stats->cpu.irq - system_stats_old.cpu.irq)/time_diff;
-	new_stats->cpu.softirq_diff = (double)(new_stats->cpu.softirq - system_stats_old.cpu.softirq)/time_diff;
-	new_stats->cpu.steal_diff = (double)(new_stats->cpu.steal - system_stats_old.cpu.steal)/time_diff;
-	new_stats->cpu.guest_diff = (double)(new_stats->cpu.guest - system_stats_old.cpu.guest)/time_diff;
+	new_stats->cpu.utime_diff = (new_stats->cpu.utime - system_stats_old.cpu.utime)/time_diff;
+	new_stats->cpu.stime_diff = (new_stats->cpu.stime - system_stats_old.cpu.stime)/time_diff;
+	new_stats->cpu.idle_diff = (new_stats->cpu.idle - system_stats_old.cpu.idle)/time_diff;
+	new_stats->cpu.iowait_diff = (new_stats->cpu.iowait - system_stats_old.cpu.iowait)/time_diff;
+	new_stats->cpu.irq_diff = (new_stats->cpu.irq - system_stats_old.cpu.irq)/time_diff;
+	new_stats->cpu.softirq_diff = (new_stats->cpu.softirq - system_stats_old.cpu.softirq)/time_diff;
+	new_stats->cpu.steal_diff = (new_stats->cpu.steal - system_stats_old.cpu.steal)/time_diff;
+	new_stats->cpu.guest_diff = (new_stats->cpu.guest - system_stats_old.cpu.guest)/time_diff;
 }
 
 system_stat get_system_stats(void)

@@ -27,6 +27,8 @@ PG_FUNCTION_INFO_V1(bg_mon_launch);
 void _PG_init(void);
 void bg_mon_main(Datum);
 
+extern int MaxConnections;
+
 pthread_mutex_t lock;
 
 /* flags set by signal handlers */
@@ -114,11 +116,14 @@ send_document_cb(struct evhttp_request *req, void *arg)
 	la = s.load_avg;
 
 	evbuffer_add_printf(evb, "{\"hostname\": \"%s\", \"sysname\": \"Linux: %s\", ", s.hostname, s.sysname);
-	evbuffer_add_printf(evb, "\"cpu_cores\": %d, \"system_stats\": {\"uptime\": %d, ", c.cpu_count, s.uptime);
-	evbuffer_add_printf(evb, "\"load_average\": [%4.6g, %4.6g, %4.6g], ", la.run_1min, la.run_5min, la.run_15min);
-	evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", c.utime_diff, c.stime_diff);
-	evbuffer_add_printf(evb, "\"idle\": %2.1f, \"iowait\": %2.1f}, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
-	evbuffer_add_printf(evb, ", \"procs\": {\"running\": %lu, \"blocked\": %lu}, ", s.procs_running, s.procs_blocked);
+	evbuffer_add_printf(evb, "\"cpu_cores\": %d, \"connections\": {\"max\": %d, ", c.cpu_count, MaxConnections); 
+	evbuffer_add_printf(evb, "\"total\": %d, ", pg_stats_current.total_connections);
+	evbuffer_add_printf(evb, "\"active\": %d}, ", pg_stats_current.active_connections);
+	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", s.uptime);
+	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g], \"cpu\": ", la.run_1min, la.run_5min, la.run_15min);
+	evbuffer_add_printf(evb, "{\"user\": %2.1f, \"system\": %2.1f, \"idle\": ", c.utime_diff, c.stime_diff);
+	evbuffer_add_printf(evb, "%2.1f}, \"iowait\": %2.1f, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
+	evbuffer_add_printf(evb, ", \"processes\": {\"running\": %lu, \"blocked\": %lu}, ", s.procs_running, s.procs_blocked);
 	evbuffer_add_printf(evb, "\"memory\": {\"total\": %lu, \"free\": %lu, \"buffers\": %lu", m.total, m.free, m.buffers);
 	evbuffer_add_printf(evb, ", \"cached\": %lu, \"dirty\": %lu, \"commit_limit\": %lu, ", m.cached, m.dirty, m.limit);
 	evbuffer_add_printf(evb, "\"committed_as\": %lu}}, \"disk_stats\": {\"data\": {\"device\": {\"name\": ", m.as);
@@ -141,8 +146,8 @@ send_document_cb(struct evhttp_request *req, void *arg)
 			else evbuffer_add_printf(evb, ", ");
 			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": \"%s\", \"state\": \"%c\", ", s.pid, type, ps.state);
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
-			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.guest_time_diff, io.read_bytes_diff);
-			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_bytes_diff, ps.uss);
+			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.guest_time_diff, io.read_diff);
+			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
 			if (s.is_backend) {
 				if (s.age > -1)
 					evbuffer_add_printf(evb, ", \"age\": %d", s.age);
