@@ -147,7 +147,7 @@ static void diff_system_stats(system_stat *new_stats)
 
 	new_stats->ctxt_diff = (double)(new_stats->ctxt - system_stats_old.ctxt)/time_diff;
 
-	time_diff = new_stats->cpu.total - system_stats_old.cpu.total;
+	time_diff = (new_stats->cpu.total - system_stats_old.cpu.total)/100.0;
 	new_stats->cpu.utime_diff = (double)(new_stats->cpu.utime - system_stats_old.cpu.utime)/time_diff;
 	new_stats->cpu.stime_diff = (double)(new_stats->cpu.stime - system_stats_old.cpu.stime)/time_diff;
 	new_stats->cpu.idle_diff = (double)(new_stats->cpu.idle - system_stats_old.cpu.idle)/time_diff;

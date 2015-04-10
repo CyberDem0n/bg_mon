@@ -355,7 +355,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			is_locker = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 10, &isnull));
 			ps.query = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 9);
 
-			if (is_locker || (ps.query != NULL && strncmp(ps.query, "idle", 5))) {
+			if (is_locker || (ps.query != NULL && strncmp(ps.query, "\"idle\"", 7))) {
 				ps.datname = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 1);
 				ps.usename = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 3);
 				ps.age = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 6, &isnull));
@@ -413,15 +413,15 @@ void postgres_stats_init(void)
 	initStringInfo(&pg_stat_activity_query);
 	appendStringInfo(&pg_stat_activity_query,
 					"WITH activity AS ("
-					"SELECT datname,"
+					"SELECT to_json(datname)::text AS datname,"
 							"a.pid as pid,"
-							"usename,"
+							"to_json(usename)::text AS usename,"
 							"client_addr,"
 							"client_port,"
 							"round(extract(epoch from (now() - xact_start))) as age,"
 							"waiting,"
 							"string_agg(other.pid::TEXT, ',' ORDER BY other.pid) as locked_by,"
-							"CASE "
+							"to_json(CASE "
 								"WHEN state = 'idle in transaction' THEN "
 									"CASE WHEN xact_start != state_change THEN "
 										"state||' '||CAST( abs(round(extract(epoch from (now() - state_change)))) AS text ) "
@@ -430,7 +430,7 @@ void postgres_stats_init(void)
 									"END "
 								"WHEN state = 'active' THEN query "
 								"ELSE state "
-								"END AS query "
+								"END)::text AS query "
 					"FROM pg_stat_activity a "
 					"LEFT JOIN pg_locks  this ON (this.pid = a.pid and this.granted = 'f') "
 /*					-- acquire the same type of lock that is granted */

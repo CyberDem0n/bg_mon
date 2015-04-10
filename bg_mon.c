@@ -93,15 +93,17 @@ initialize_bg_mon()
 static void
 send_document_cb(struct evhttp_request *req, void *arg)
 {
+	bool is_first = true;
 	size_t i;
 	disk_stat d;
 	system_stat s;
 	cpu_stat c;
 	meminfo m;
+	load_avg la;
 
 	struct evbuffer *evb = NULL;
 
-	evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/plain");
+	evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "application/json");
 
 	evb = evbuffer_new();
 	pthread_mutex_lock(&lock);
@@ -109,20 +111,53 @@ send_document_cb(struct evhttp_request *req, void *arg)
 	s = system_stats_current;
 	c = s.cpu;
 	m = s.mem;
+	la = s.load_avg;
 
-	evbuffer_add_printf(evb, "%s up %d %d cores Linux %s load average %4.6g %4.6g %4.6g\n", s.hostname, s.uptime, s.cpu.cpu_count, s.sysname, s.load_avg.run_1min, s.load_avg.run_5min, s.load_avg.run_15min);
-	evbuffer_add_printf(evb, "sys: utime %2.1f stime %2.1f idle %2.1f iowait %2.1f ctxt %lu run %lu block %lu\n", c.utime_diff*100, c.stime_diff*100, c.idle_diff*100, c.iowait_diff*100, s.ctxt_diff, s.procs_running, s.procs_blocked);
-	evbuffer_add_printf(evb, "mem: total %lu free %lu buffers %lu cached %lu dirty %lu limit %lu as %lu\n", m.total, m.free, m.buffers, m.cached, m.dirty, m.limit, m.as);
-	evbuffer_add_printf(evb, "data %s:%s total %llu left %llu size %llu read %u write %u await %u\n", d.data_dev, d.data_directory, d.data_size, d.data_free, d.du_data, d.data_read_diff, d.data_write_diff, d.data_time_in_queue_diff);
-	evbuffer_add_printf(evb, "xlog %s:%s total %llu left %llu size %llu read %u write %u await %u\n", d.xlog_dev, d.xlog_directory, d.xlog_size, d.xlog_free, d.du_xlog, d.xlog_read_diff, d.xlog_write_diff, d.xlog_time_in_queue_diff);
+	evbuffer_add_printf(evb, "{\"hostname\": \"%s\", \"sysname\": \"Linux: %s\", ", s.hostname, s.sysname);
+	evbuffer_add_printf(evb, "\"cpu_cores\": %d, \"system_stats\": {\"uptime\": %d, ", c.cpu_count, s.uptime);
+	evbuffer_add_printf(evb, "\"load_average\": [%4.6g, %4.6g, %4.6g], ", la.run_1min, la.run_5min, la.run_15min);
+	evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", c.utime_diff, c.stime_diff);
+	evbuffer_add_printf(evb, "\"idle\": %2.1f, \"iowait\": %2.1f}, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
+	evbuffer_add_printf(evb, ", \"procs\": {\"running\": %lu, \"blocked\": %lu}, ", s.procs_running, s.procs_blocked);
+	evbuffer_add_printf(evb, "\"memory\": {\"total\": %lu, \"free\": %lu, \"buffers\": %lu", m.total, m.free, m.buffers);
+	evbuffer_add_printf(evb, ", \"cached\": %lu, \"dirty\": %lu, \"commit_limit\": %lu, ", m.cached, m.dirty, m.limit);
+	evbuffer_add_printf(evb, "\"committed_as\": %lu}}, \"disk_stats\": {\"data\": {\"device\": {\"name\": ", m.as);
+	evbuffer_add_printf(evb, "\"%s\", \"space\": {\"total\": %llu, \"left\": %llu", d.data_dev, d.data_size, d.data_free);
+	evbuffer_add_printf(evb, "}, \"io\": {\"read\": %u, \"write\": %u, ", d.data_read_diff, d.data_write_diff);
+	evbuffer_add_printf(evb, "\"await\": %u}}, \"directory\": {\"name\": \"%s\"", d.data_time_in_queue_diff, d.data_directory);
+	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"xlog\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.xlog_dev);
+	evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, \"io\": ", d.xlog_size, d.xlog_free);
+	evbuffer_add_printf(evb, "{\"read\": %u, \"write\": %u, \"await\": ", d.xlog_read_diff, d.xlog_write_diff);
+	evbuffer_add_printf(evb, "%u}}, \"directory\": {\"name\": \"%s\", ", d.xlog_time_in_queue_diff, d.xlog_directory);
+	evbuffer_add_printf(evb, "\"size\": %llu}}}, \"processes\": [", d.xlog_size);
+
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
-		proc_stat ps = s.ps;
-		if (s.is_backend && s.query != NULL)
-			evbuffer_add_printf(evb, "%d %s %c %f %f %f %lu %lu %s %s %s\n", s.pid, "backend", ps.state, ps.utime_diff, ps.stime_diff, ps.guest_time_diff, ps.io.read_bytes_diff, ps.io.write_bytes_diff, s.datname==NULL?"nil":s.datname, s.usename==NULL?"nil":s.usename, s.query);
-		else if (!s.is_backend)
-			evbuffer_add_printf(evb, "%d %s %c %f %f %f %lu %lu\n", s.pid, ps.cmdline==NULL?"unknown":ps.cmdline, ps.state, ps.utime_diff, ps.stime_diff, ps.guest_time_diff, ps.io.read_bytes_diff, ps.io.write_bytes_diff);
+		if (!s.is_backend || s.query != NULL) {
+			proc_stat ps = s.ps;
+			proc_io io = ps.io;
+			char *type = s.is_backend ? "backend" : ps.cmdline == NULL ? "unknown" : ps.cmdline;
+			if (is_first) is_first = false;
+			else evbuffer_add_printf(evb, ", ");
+			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": \"%s\", \"state\": \"%c\", ", s.pid, type, ps.state);
+			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
+			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.guest_time_diff, io.read_bytes_diff);
+			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_bytes_diff, ps.uss);
+			if (s.is_backend) {
+				if (s.age > -1)
+					evbuffer_add_printf(evb, ", \"age\": %d", s.age);
+
+				evbuffer_add_printf(evb, ", \"database\": %s, ", s.datname == NULL ? "null" : s.datname);
+				evbuffer_add_printf(evb, "\"username\": %s, ", s.usename == NULL ? "null" : s.usename);
+				evbuffer_add_printf(evb, "\"query\": %s", s.query);
+				if (s.locked_by != NULL)
+					evbuffer_add_printf(evb, ", \"locked_by\": [%s]", s.locked_by);
+			}
+			evbuffer_add_printf(evb, "}");
+		}
 	}
+
+	evbuffer_add_printf(evb, "]}");
 
 	pthread_mutex_unlock(&lock);
 	evhttp_send_reply(req, 200, "OK", evb);
