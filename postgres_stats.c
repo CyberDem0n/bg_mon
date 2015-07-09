@@ -148,7 +148,7 @@ static proc_stat read_proc_stat(pid_t pid)
 		&ps.rss, &ps.delayacct_blkio_ticks, &ps.guest_time);
 
 	if (ps.fields < 9) {
-		elog(LOG, "Can't parse content of /proc/%d/stat", pid);
+		elog(DEBUG1, "Can't parse content of /proc/%d/stat", pid);
 		ps.fields = ps.ppid = 0;
 	}
 
