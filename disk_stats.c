@@ -62,10 +62,10 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 	}
 
 	while (readdir_r(dir, &buf, &e) == 0 && e != NULL)
-		// skip "." and ".."
-		if (e->d_name[0] != '.'
-				|| (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2]))
-				|| !strncmp(e->d_name, "lost+found", 11)) {
+		// skip "." and "..", don't go into lost+found
+		if ((e->d_name[0] != '.'
+				|| (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2])))
+				&& strcmp(e->d_name, "lost+found") != 0) {
 
 			if (xlog && !strncmp(e->d_name, pg_xlog, sizeof(pg_xlog))) {
 				*xlog = du(dirfd, e->d_name, 0, NULL);
