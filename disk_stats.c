@@ -282,7 +282,7 @@ static void diff_disk_stats(disk_stat *new_stats)
 	new_stats->data_time_in_queue_diff = (new_stats->data_time_in_queue - disk_stats_old.data_time_in_queue)/time_diff;
 	new_stats->xlog_time_in_queue_diff = (new_stats->xlog_time_in_queue - disk_stats_old.xlog_time_in_queue)/time_diff;
 
-	time_diff *= 2.0;
+	time_diff *= 2.0; /* to obtain diffs in kB */
 
 	new_stats->data_read_diff = (new_stats->data_sectors_read - disk_stats_old.data_sectors_read)/time_diff;
 	new_stats->data_write_diff = (new_stats->data_sectors_written - disk_stats_old.data_sectors_written)/time_diff;
