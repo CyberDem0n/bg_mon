@@ -37,6 +37,8 @@ static volatile sig_atomic_t got_sigterm = false;
 
 /* GUC variables */
 static int bg_mon_naptime = 1;
+static char *bg_mon_listen_address;
+static int bg_mon_port = 8080;
 
 static pg_stat_list pg_stats_current;
 static disk_stat diskspace_stats_current;
@@ -181,7 +183,6 @@ static void *webapi(void *arg)
 void
 bg_mon_main(Datum main_arg)
 {
-	unsigned short port = 8080;
 	pthread_t thread;
 	struct timezone tz;
 	struct timeval current_time, next_run;
@@ -198,6 +199,15 @@ bg_mon_main(Datum main_arg)
 	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
 		proc_exit(1);
 
+	/* We're now ready to receive signals */
+	BackgroundWorkerUnblockSignals();
+
+	/* Connect to our database */
+	BackgroundWorkerInitializeConnection("postgres", NULL);
+
+	initialize_bg_mon();
+
+restart:
 	if (!(base = event_base_new())) {
 		elog(ERROR, "Couldn't create an event_base: exiting");
 		return proc_exit(1);
@@ -214,22 +224,14 @@ bg_mon_main(Datum main_arg)
 	evhttp_set_gencb(http, send_document_cb, NULL);
 
 	/* Now we tell the evhttp what port to listen on */
-	if (!(handle = evhttp_bind_socket_with_handle(http, "0.0.0.0", port))) {
-		elog(ERROR, "couldn't bind to port %d. Exiting.\n", (int)port);
+	if (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port))) {
+		elog(ERROR, "couldn't bind to %s:%d. Exiting.", bg_mon_listen_address, bg_mon_port);
 		return proc_exit(1);
 	}
 
 	pthread_mutex_init(&lock, NULL);
 
 	pthread_create(&thread, NULL, webapi, base);
-
-	/* We're now ready to receive signals */
-	BackgroundWorkerUnblockSignals();
-
-	/* Connect to our database */
-	BackgroundWorkerInitializeConnection("postgres", NULL);
-
-	initialize_bg_mon();
 
 	gettimeofday(&next_run, &tz);
 
@@ -262,11 +264,20 @@ bg_mon_main(Datum main_arg)
 		}
 
 		/*
-		 * In case of a SIGHUP, just reload the configuration.
+		 * In case of a SIGHUP, reload the configuration and restart the web server.
 		 */
 		if (got_sighup) {
 			got_sighup = false;
 			ProcessConfigFile(PGC_SIGHUP);
+
+			pthread_cancel(thread);
+			pthread_join(thread, NULL);
+
+			pthread_mutex_destroy(&lock);
+
+			evhttp_free(http);
+			event_base_free(base);
+			goto restart;
 		}
 
 		{
@@ -308,6 +319,28 @@ _PG_init(void)
 							1,
 							1,
 							10,
+							PGC_SIGHUP,
+							GUC_UNIT_S,
+							NULL,
+							NULL,
+							NULL);
+	DefineCustomStringVariable("bg_mon.listen_address",
+							"The IP address for the web server to listen on.",
+							NULL,
+							&bg_mon_listen_address,
+							"0.0.0.0",
+							PGC_SIGHUP,
+							0,
+							NULL,
+							NULL,
+							NULL);
+	DefineCustomIntVariable("bg_mon.port",
+							"Port number to bind the web server to.",
+							NULL,
+							&bg_mon_port,
+							8080,
+							0,
+							65535,
 							PGC_SIGHUP,
 							0,
 							NULL,
