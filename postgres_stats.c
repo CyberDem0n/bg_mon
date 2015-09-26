@@ -65,14 +65,8 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 
 	if (list->pos >= list->size) {
 		int new_size = list->size > 0 ? list->size * 2 : 7;
-		pg_stat *nvalues = (pg_stat *)repalloc(list->values, sizeof(pg_stat)*new_size);
-		if (nvalues == NULL) {
-			elog(LOG, "Can't allocate %lu memory for pg_stat_list",
-						sizeof(pg_stat)*new_size);
-			return false;
-		}
 		list->size = new_size;
-		list->values = nvalues;
+		list->values = repalloc(list->values, sizeof(pg_stat)*new_size);
 	}
 	list->values[list->pos++] = ps;
 	return true;
@@ -148,7 +142,7 @@ static proc_stat read_proc_stat(pid_t pid)
 		&ps.rss, &ps.delayacct_blkio_ticks, &ps.guest_time);
 
 	if (ps.fields < 9) {
-		elog(LOG, "Can't parse content of /proc/%d/stat", pid);
+		elog(DEBUG1, "Can't parse content of /proc/%d/stat", pid);
 		ps.fields = ps.ppid = 0;
 	}
 
@@ -163,14 +157,8 @@ static bool proc_stats_add(proc_stat_list *list, proc_stat ps)
 
 	if (list->pos >= list->size) {
 		int new_size = list->size > 0 ? list->size * 2 : 7;
-		proc_stat *nvalues = (proc_stat *)repalloc(list->values, sizeof(proc_stat)*new_size);
-		if (nvalues == NULL) {
-			elog(LOG, "Can't allocate %lu memory for proc_stat_list",
-						sizeof(proc_stat)*new_size);
-			return false;
-		}
 		list->size = new_size;
-		list->values = nvalues;
+		list->values = repalloc(list->values, sizeof(proc_stat)*new_size);
 	}
 	list->values[list->pos++] = ps;
 	return true;

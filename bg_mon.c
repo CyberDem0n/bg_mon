@@ -237,9 +237,10 @@ bg_mon_main(Datum main_arg)
 	 * Main loop: do this until the SIGTERM handler tells us to terminate
 	 */
 	while (!got_sigterm) {
-		long double	naptime = bg_mon_naptime * 1000L;
+		double	naptime;
 
-		next_run.tv_sec += bg_mon_naptime;
+		next_run.tv_sec += bg_mon_naptime; /* adjust wakeup target time */
+
 		gettimeofday(&current_time, &tz);
 
 		naptime = 1000L * (
