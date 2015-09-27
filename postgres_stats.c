@@ -6,6 +6,7 @@
 #include "miscadmin.h"
 
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "executor/spi.h"
 #include "lib/stringinfo.h"
 #include "pgstat.h"
@@ -16,8 +17,7 @@
 #define FREE(v) do {if (v != NULL) {pfree(v); v = NULL;}} while(0)
 
 extern pid_t PostmasterPid;
-extern int MaxConnections;
-extern int max_worker_processes;
+extern int MaxBackends;
 
 static unsigned long long mem_page_size;
 static double SC_CLK_TCK;
@@ -36,7 +36,7 @@ static pg_stat_list pg_stats_new;
 static void pg_stat_list_init(pg_stat_list *list)
 {
 	list->pos = 0;
-	list->size = MaxConnections + max_worker_processes + 17;
+	list->size = MaxBackends + 17;
 	list->values = palloc(sizeof(pg_stat) * list->size);
 }
 
@@ -45,8 +45,8 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 	size_t i;
 	for (i = 0; i < list->pos; ++i) {
 		pg_stat ps = list->values[i];
+		FREE(ps.query);
 		if (ps.is_backend) {
-			FREE(ps.query);
 			FREE(ps.usename);
 			FREE(ps.datname);
 			FREE(ps.locked_by);
@@ -240,25 +240,29 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
-static char *read_proc_cmdline(pid_t pid)
+static void read_proc_cmdline(pg_stat *stat)
 {
-	char *ret = NULL;
 	char buf[256];
-	FILE *f = open_proc_file(pid, "cmdline");
-	if (f == NULL) return NULL;
-	if (fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
-		char *p = strstr(buf + 10, " process");
-		if (p == NULL)
-			ret = "backend";
-		else {
-			*p = '\0';
-			ret = buf + 10;
-			if (strstr(ret, "autovacuum worker"))
-				ret = "autovacuum";
+	FILE *f = open_proc_file(stat->pid, "cmdline");
+	if (f && fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
+		const char *cmd = buf + 10;
+		char *p = strstr(cmd, " process");
+		if (stat->ps.cmdline == NULL) {
+			if (p == NULL)
+				stat->ps.cmdline = pstrdup("unknown");
+			else {
+				*p = '\0';
+				stat->ps.cmdline = pstrdup(cmd);
+			}
+		}
+
+		if (p != NULL) {
+			p += 7;
+			while (*(++p) == ' ');
+			if (*p) stat->query = pstrdup(p);
 		}
 	}
 	fclose(f);
-	return ret == NULL ? NULL : pstrdup(ret);
 }
 
 static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, double time_diff)
@@ -292,7 +296,7 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 			old_stats.values[old_pos++].ps.free_cmdline = true;
 		else if (old_pos >= old_stats.pos) {
 			if (!new_stats.values[new_pos].is_backend)
-				new_stats.values[new_pos].ps.cmdline = read_proc_cmdline(new_stats.values[new_pos].pid);
+				read_proc_cmdline(new_stats.values + new_pos);
 			++new_pos;
 		} else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
 			if (new_stats.values[new_pos].is_backend)
@@ -303,13 +307,13 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 
 				if (old_stats.values[old_pos].ps.cmdline != NULL)
 					new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
-				else new_stats.values[new_pos].ps.cmdline = read_proc_cmdline(new_stats.values[new_pos].pid);
+				read_proc_cmdline(new_stats.values + new_pos);
 			}
 
 			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, time_diff);
 		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid) {
 			if (!new_stats.values[new_pos].is_backend)
-				new_stats.values[new_pos].ps.cmdline = read_proc_cmdline(new_stats.values[new_pos].pid);
+				read_proc_cmdline(new_stats.values + new_pos);
 			++new_pos;
 		} else // old.pid < new.pid
 			old_stats.values[old_pos++].ps.free_cmdline = true;
@@ -334,6 +338,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	if (ret != SPI_OK_SELECT)
 		elog(FATAL, "cannot select from pg_stat_activity: error code %d", ret);
 
+	pg_stats->recovery_in_progress = RecoveryInProgress();
 	pg_stats->total_connections = SPI_processed + 1;
 	pg_stats->active_connections = 0;
 
@@ -414,7 +419,7 @@ void postgres_stats_init(void)
 							"to_json(usename)::text AS usename,"
 							"client_addr,"
 							"client_port,"
-							"round(extract(epoch from (now() - xact_start))) as age,"
+							"round(extract(epoch from (now() - xact_start)))::int as age,"
 							"waiting,"
 							"string_agg(other.pid::TEXT, ',' ORDER BY other.pid) as locked_by,"
 							"to_json(CASE "

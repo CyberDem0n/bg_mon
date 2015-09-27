@@ -49,6 +49,7 @@ typedef struct {
 	size_t size;
 	size_t pos;
 	struct timeval time;
+	bool recovery_in_progress;
 	int total_connections;
 	int active_connections;
 } pg_stat_list;
