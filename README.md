@@ -13,7 +13,7 @@ These values can be overriden with followin GUC variables:
 
 **bg_mon.port** = **8888** # listen on port 8888 (default value: 8080)
 
-**bg_mon.naptime** = **10** collect statistics every 10 seconds (default value: 1)
+**bg_mon.naptime** = **10** # collect statistics every 10 seconds (default value: 1)
 
 How to build and install:
 -------------------------
