@@ -244,7 +244,9 @@ static void read_proc_cmdline(pg_stat *stat)
 {
 	char buf[256];
 	FILE *f = open_proc_file(stat->pid, "cmdline");
-	if (f && fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
+	if (f == NULL) return;
+
+	if (fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
 		const char *cmd = buf + 10;
 		char *p = strstr(cmd, " process");
 		if (stat->ps.cmdline == NULL) {
