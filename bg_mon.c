@@ -31,7 +31,7 @@ void _PG_init(void);
 void bg_mon_main(Datum);
 
 extern int MaxConnections;
-extern char *data_directory;
+extern char *DataDir;
 
 pthread_mutex_t lock;
 
@@ -118,7 +118,7 @@ static void prepares_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, "{\"hostname\": \"%s\", \"sysname\": \"Linux: %s\", ", s.hostname, s.sysname);
 	evbuffer_add_printf(evb, "\"cpu_cores\": %d, \"postgresql\": {\"version\": \"%s\"", c.cpu_count, PG_VERSION);
 	evbuffer_add_printf(evb, ", \"role\": \"%s\", ", pg_stats_current.recovery_in_progress?"standby":"master");
-	evbuffer_add_printf(evb, "\"data_directory\": \"%s\", \"connections\": {\"max\": %d", data_directory, MaxConnections); 
+	evbuffer_add_printf(evb, "\"data_directory\": \"%s\", \"connections\": {\"max\": %d", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, ", \"total\": %d, ", pg_stats_current.total_connections);
 	evbuffer_add_printf(evb, "\"active\": %d}}, ", pg_stats_current.active_connections);
 	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", s.uptime);

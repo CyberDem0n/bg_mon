@@ -24,7 +24,7 @@ typedef struct {
 } mount_entry;
 
 static const char pg_xlog[] = "pg_xlog";
-extern char *data_directory;
+extern char *DataDir;
 static char *xlog_directory;
 static char *data_dev;
 static char *xlog_dev;
@@ -297,9 +297,9 @@ disk_stat get_diskspace_stats(void)
 	struct statvfs st;
 	disk_stat disk_stats = {0, };
 
-	disk_stats.du_data = du(AT_FDCWD, data_directory, 0, &disk_stats.du_xlog);
+	disk_stats.du_data = du(AT_FDCWD, DataDir, 0, &disk_stats.du_xlog);
 
-	if (statvfs(data_directory, &st) == 0) {
+	if (statvfs(DataDir, &st) == 0) {
 		disk_stats.data_size = st.f_blocks * st.f_bsize / 1024;
 		disk_stats.data_free = st.f_bavail * st.f_bsize / 1024;
 	}
@@ -318,7 +318,7 @@ disk_stat get_diskspace_stats(void)
 
 	diff_disk_stats(&disk_stats);
 
-	disk_stats.data_directory = data_directory;
+	disk_stats.data_directory = DataDir;
 	disk_stats.data_dev = data_dev;
 
 	disk_stats.xlog_directory = xlog_directory;
@@ -330,14 +330,14 @@ disk_stat get_diskspace_stats(void)
 void disk_stats_init(void)
 {
 	List *mounts = read_mounts();
-	size_t len = strlen(data_directory);
+	size_t len = strlen(DataDir);
 	xlog_directory = palloc(len + sizeof(pg_xlog) + 2);
-	strcpy(xlog_directory, data_directory);
+	strcpy(xlog_directory, DataDir);
 	if (xlog_directory[len - 1] != '/')
 		xlog_directory[len++] = '/';
 	strcpy(xlog_directory + len, pg_xlog);
 
-	data_dev = get_device(mounts, data_directory);
+	data_dev = get_device(mounts, DataDir);
 	if (data_dev) data_dev = pstrdup(data_dev);
 	xlog_dev = get_device(mounts, xlog_directory);
 	if (xlog_dev) {
