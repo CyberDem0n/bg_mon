@@ -242,26 +242,38 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 
 static void read_proc_cmdline(pg_stat *stat)
 {
-	char buf[256];
+	char buf[MAXPGPATH];
 	FILE *f = open_proc_file(stat->pid, "cmdline");
 	if (f == NULL) return;
 
 	if (fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
-		const char *cmd = buf + 10;
-		char *p = strstr(cmd, " process");
-		if (stat->ps.cmdline == NULL) {
-			if (p == NULL)
-				stat->ps.cmdline = pstrdup("unknown");
-			else {
-				*p = '\0';
-				stat->ps.cmdline = pstrdup(cmd);
-			}
+		char *p, *lp = NULL;
+
+		// cluster name can contain ' process ' string, so we need to skip all but last
+		for (p = buf + 1; (p = strstr(p + 9, " process ")) != NULL; lp = p);
+
+		if (lp != NULL) {
+			for (p = lp + 9; *p == ' '; p++);
+			if (*p) stat->query = pstrdup(p);
 		}
 
-		if (p != NULL) {
-			p += 7;
-			while (*(++p) == ' ');
-			if (*p) stat->query = pstrdup(p);
+		if (stat->ps.cmdline == NULL) {
+			if (lp == NULL) { // no " process " delimiter string in the cmdline, it could be a bgworker process
+				// cluster name can contain ' bgworker: ' string, so we need to skip all but last
+				// buf - 2 + 11 points to the first space character after 'postgres:' string
+				for (p = buf - 2; (p = strstr(p + 11, " bgworker: ")) != NULL; lp = p);
+				if (lp == NULL) stat->ps.cmdline = pstrdup("unknown");
+				else {
+					for (p = lp + 11; *p != '\0'; ++p);
+					while (*(--p) == ' ') *p = '\0'; // trim whitespaces
+					stat->ps.cmdline = pstrdup(lp + 1);
+				}
+			} else {
+				*lp = '\0';
+				// cmdline starts after last colon followed by whitespace
+				for (p = lp - 1; *p != ':'; --p);
+				stat->ps.cmdline = pstrdup(p + 2);
+			}
 		}
 	}
 	fclose(f);
