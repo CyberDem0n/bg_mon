@@ -258,10 +258,10 @@ static void read_proc_cmdline(pg_stat *stat)
 		}
 
 		if (stat->ps.cmdline == NULL) {
-			if (lp == NULL) { // no " process " delimiter string in the cmdline
-				// it could be a bgworker process
+			if (lp == NULL) { // no " process " delimiter string in the cmdline, it could be a bgworker process
 				// cluster name can contain ' bgworker: ' string, so we need to skip all but last
-				for (p = buf - 1; (p = strstr(p + 11, " bgworker: ")) != NULL; lp = p);
+				// buf - 2 + 11 points to the first space character after 'postgres:' string
+				for (p = buf - 2; (p = strstr(p + 11, " bgworker: ")) != NULL; lp = p);
 				if (lp == NULL) stat->ps.cmdline = pstrdup("unknown");
 				else {
 					for (p = lp + 11; *p != '\0'; ++p);
