@@ -96,6 +96,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 			}
 		}
 	}
+	fclose(csfd);
 
 	return cm;
 }
