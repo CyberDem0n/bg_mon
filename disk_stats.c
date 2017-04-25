@@ -17,7 +17,6 @@
 typedef struct {
 	char *me_devname;
 	char *me_mountdir;
-	char *me_type;
 	dev_t me_dev;
 	bool me_dummy;
 	bool me_remote;
@@ -30,6 +29,8 @@ static char *data_dev;
 static char *xlog_dev;
 
 static disk_stat disk_stats_old = {0,};
+
+char *memory_cgroup_mount = NULL;
 
 /******************************************************
  * implementation of du -s and du -sx functionality for
@@ -94,6 +95,7 @@ static bool is_dummy(struct mntent *me)
 		|| strcmp(me->mnt_type, "rpc_pipefs") == 0
 		|| strcmp(me->mnt_type, "sysfs") == 0
 		|| strcmp(me->mnt_type, "devfs") == 0
+		|| strcmp(me->mnt_type, "cgroup") == 0
 		|| strcmp(me->mnt_type, "lofs") == 0
 		|| strcmp(me->mnt_type, "none") == 0)
 		&& hasmntopt(me, "bind") == NULL;
@@ -118,11 +120,14 @@ static List *read_mounts()
 		mount_entry *m = palloc(sizeof(mount_entry));
 		m->me_devname = pstrdup(me->mnt_fsname);
 		m->me_mountdir = pstrdup(me->mnt_dir);
-		m->me_type = pstrdup(me->mnt_type);
 		m->me_dev = -1;
 		m->me_dummy = is_dummy(me);
 		m->me_remote = is_remote(me);
 		mounts = lappend(mounts, m);
+		if (memory_cgroup_mount == NULL
+				&& strcmp(me->mnt_type, "cgroup") == 0
+				&& hasmntopt(me, "memory"))
+			memory_cgroup_mount = pstrdup(me->mnt_dir);
 	}
 	return mounts;
 }
@@ -134,7 +139,6 @@ static void free_mounts(List *mounts)
 		mount_entry *m = lfirst(lc);
 		FREE(m->me_devname);
 		FREE(m->me_mountdir);
-		FREE(m->me_type);
 	}
 	list_free_deep(mounts);
 }

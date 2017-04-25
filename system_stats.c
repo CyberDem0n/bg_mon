@@ -10,6 +10,10 @@
 
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
 
+extern char *memory_cgroup_mount;
+static char *memory_cgroup = NULL;
+static int memory_cgroup_len = 0;
+
 static char *sysname = "Linux";
 static char *nodename = NULL;
 
@@ -45,8 +49,60 @@ static overcommit read_overcommit(void)
 	return oc;
 }
 
+static unsigned long cgroup_read_ulong(const char *name)
+{
+	FILE *f;
+	unsigned long ret = 0;
+	strcpy(memory_cgroup + memory_cgroup_len, name);
+	if ((f = fopen(memory_cgroup, "r")) != NULL) {
+		if (fscanf(f, "%lu", &ret) == 1);
+		fclose(f);
+	}
+	return ret;
+}
+
+static cgroup_memory read_cgroup_memory_stats(void)
+{
+	FILE *csfd;
+	int i = 0, j = 0;
+	cgroup_memory cm = {0,};
+	char name[6], buf[255];
+	unsigned long value;
+	struct _mem_tab {
+		const char *name;
+		unsigned long *value;
+	} mem_tab[] = {
+		{"cache", &cm.cache},
+		{"rss", &cm.rss},
+		{NULL, NULL}
+	};
+
+	cm.available = true;
+	cm.limit = cgroup_read_ulong("limit_in_bytes") / 1024;
+	cm.usage = cgroup_read_ulong("usage_in_bytes") / 1024;
+
+	strcpy(memory_cgroup + memory_cgroup_len, "stat");
+	if ((csfd = fopen(memory_cgroup, "r")) == NULL)
+		return cm;
+
+	while (i < sizeof(mem_tab)/sizeof(struct _mem_tab) - 1
+			&& fgets(buf, sizeof(buf), csfd)
+			&& sscanf(buf, "%5s %lu", name, &value)) {
+		for (j = 0; mem_tab[j].name != NULL; ++j) {
+			if (strcmp(mem_tab[j].name, name) == 0) {
+				++i;
+				*mem_tab[j].value = value / 1024;
+				break;
+			}
+		}
+	}
+
+	return cm;
+}
+
 static meminfo read_meminfo(void)
 {
+	FILE *mifd;
 	int i = 0, j = 0;
 	meminfo mi = {0,};
 	char *dpos, buf[255];
@@ -65,9 +121,10 @@ static meminfo read_meminfo(void)
 		{NULL, NULL}
 	};
 
-	FILE *mifd = fopen("/proc/meminfo", "r");
+	if (memory_cgroup != NULL)
+		mi.cgroup = read_cgroup_memory_stats();
 
-	if (mifd == NULL)
+	if ((mifd = fopen("/proc/meminfo", "r")) == NULL)
 		return mi;
 
 	while (fgets(buf, sizeof(buf), mifd) && i < sizeof(mem_tab)/sizeof(struct _mem_tab) - 1) {
@@ -85,7 +142,7 @@ static meminfo read_meminfo(void)
 						else if (unit[0] == 'm')
 							*mem_tab[j].value *= 1024;
 					}
-					mi.available = 1;
+					mi.available = true;
 				}
 				break;
 			}
@@ -108,7 +165,7 @@ static system_stat read_proc_stat(void)
 		return st;
 
 	while (fgets(buf, sizeof(buf), stfd))
-		if (sscanf(buf, "%s %llu", param, &value) == 2) {
+		if (sscanf(buf, "%31s %llu", param, &value) == 2) {
 			if (strcmp(param, "cpu") == 0) {
 				cpu_stat *cs = &st.cpu;
 				cs->fields = sscanf(buf, "%*s %llu %*u %llu %llu %llu %llu %llu %llu %llu",
@@ -178,4 +235,12 @@ void system_stats_init(void)
 	struct utsname un;
 	if (uname(&un) == 0)
 		sysname = pstrdup(un.release);
+
+	if (memory_cgroup_mount != NULL) {
+		const char prefix[] = "/memory.";
+		memory_cgroup_len = strlen(memory_cgroup_mount);
+		memory_cgroup = repalloc(memory_cgroup_mount, memory_cgroup_len + 23);
+		strcpy(memory_cgroup + memory_cgroup_len, prefix);
+		memory_cgroup_len += sizeof(prefix) - 1;
+	}
 }
