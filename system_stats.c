@@ -87,7 +87,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 
 	while (i < sizeof(mem_tab)/sizeof(struct _mem_tab) - 1
 			&& fgets(buf, sizeof(buf), csfd)
-			&& sscanf(buf, "%5s %lu", name, &value)) {
+			&& sscanf(buf, "%5s %lu", name, &value) == 2) {
 		for (j = 0; mem_tab[j].name != NULL; ++j) {
 			if (strcmp(mem_tab[j].name, name) == 0) {
 				++i;
@@ -240,7 +240,7 @@ void system_stats_init(void)
 	if (memory_cgroup_mount != NULL) {
 		const char prefix[] = "/memory.";
 		memory_cgroup_len = strlen(memory_cgroup_mount);
-		memory_cgroup = repalloc(memory_cgroup_mount, memory_cgroup_len + 23);
+		memory_cgroup = repalloc(memory_cgroup_mount, memory_cgroup_len + 23); /* strlen("/memory.usage_in_bytes") + 1 */
 		strcpy(memory_cgroup + memory_cgroup_len, prefix);
 		memory_cgroup_len += sizeof(prefix) - 1;
 	}
