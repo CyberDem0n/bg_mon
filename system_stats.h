@@ -16,6 +16,15 @@ typedef struct {
 
 typedef struct {
 	bool available;
+	unsigned long limit;
+	unsigned long usage;
+	unsigned long rss;
+	unsigned long cache;
+} cgroup_memory;
+
+typedef struct {
+	bool available;
+	cgroup_memory cgroup;
 	unsigned long total;
 	unsigned long free;
 	unsigned long buffers;

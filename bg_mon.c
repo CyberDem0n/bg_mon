@@ -128,8 +128,14 @@ static void prepares_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, ", \"processes\": {\"running\": %lu, \"blocked\": %lu}, ", s.procs_running, s.procs_blocked);
 	evbuffer_add_printf(evb, "\"memory\": {\"total\": %lu, \"free\": %lu, \"buffers\": %lu", m.total, m.free, m.buffers);
 	evbuffer_add_printf(evb, ", \"cached\": %lu, \"dirty\": %lu, \"commit_limit\": %lu, ", m.cached, m.dirty, m.limit);
-	evbuffer_add_printf(evb, "\"committed_as\": %lu}}, \"disk_stats\": {\"data\": {\"device\": {\"name\": ", m.as);
-	evbuffer_add_printf(evb, "\"%s\", \"space\": {\"total\": %llu, \"left\": %llu", d.data_dev, d.data_size, d.data_free);
+	evbuffer_add_printf(evb, "\"committed_as\": %lu", m.as);
+	if (m.cgroup.available) {
+		cgroup_memory cm = m.cgroup;
+		evbuffer_add_printf(evb, ", \"cgroup\": {\"limit\": %lu, \"usage\": %lu", cm.limit, cm.usage);
+		evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu}", cm.rss, cm.cache);
+	}
+	evbuffer_add_printf(evb, "}}, \"disk_stats\": {\"data\": {\"device\": {\"name\": \"%s\"", d.data_dev);
+	evbuffer_add_printf(evb, ", \"space\": {\"total\": %llu, \"left\": %llu", d.data_size, d.data_free);
 	evbuffer_add_printf(evb, "}, \"io\": {\"read\": %u, \"write\": %u, ", d.data_read_diff, d.data_write_diff);
 	evbuffer_add_printf(evb, "\"await\": %u}}, \"directory\": {\"name\": \"%s\"", d.data_time_in_queue_diff, d.data_directory);
 	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"xlog\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.xlog_dev);
