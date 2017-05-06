@@ -418,7 +418,7 @@ pg_stat_list get_postgres_stats(void)
 
 void postgres_stats_init(void)
 {
-	mem_page_size = getpagesize();
+	mem_page_size = getpagesize() / 1024;
 	SC_CLK_TCK = sysconf(_SC_CLK_TCK);
 	pg_stat_list_init(&pg_stats_current);
 	pg_stat_list_init(&pg_stats_new);
