@@ -156,11 +156,11 @@ function apply(data, ns) {
 	if (ns == '') {
 		data['io'] = {};
 		set_diskstats_values(data, 'data')
-		if (data['io']['data_dev'] == data['disk_stats']['xlog']['device']['name']) {
-			var el = document.getElementById('io.xlog_tmpl');
+		if (data['io']['data_dev'] == data['disk_stats']['wal']['device']['name']) {
+			var el = document.getElementById('io.wal_tmpl');
 			if (el != null) el.style.display = 'none';
 		} else
-			set_diskstats_values(data, 'xlog');
+			set_diskstats_values(data, 'wal');
 	}
 
 	for (var key in data) {
@@ -198,7 +198,7 @@ function body_loaded() {
 	create_chart('system_stats.cpu', -10, 1.2, ['total', 'user', 'system', 'iowait']);
 	create_chart('system_stats.load_average', -1, 2, ['0', '1', '2']);
 	create_chart('system_stats.memory', -1, 1.2, ['used', 'free', 'cache']);
-	create_chart('io', -100, 1.2, ['data_read', 'data_write', 'xlog_read', 'xlog_write']);
+	create_chart('io', -100, 1.2, ['data_read', 'data_write', 'wal_read', 'wal_write']);
 	on_resize();
 
 	setInterval(function() {
@@ -247,11 +247,11 @@ function body_loaded() {
 				<span style="color: green">Read: <b id="io.data_read"></b></span>
 				<span style="color: orange">Write: <b id="io.data_write"></b></span>
 				<span style="color: black">Await: <b id="io.data_await"></b></span>
-				<div id="io.xlog_tmpl">
-					<span style="color: black">xlog/<b id="io.xlog_dev"></b>:</span>
-					<span style="color: blue">Read: <b id="io.xlog_read"></b></span>
-					<span style="color: red">Write: <b id="io.xlog_write"></b></span>
-					<span style="color: black">Await: <b id="io.xlog_await"></b></span>
+				<div id="io.wal_tmpl">
+					<span style="color: black">wal/<b id="io.wal_dev"></b>:</span>
+					<span style="color: blue">Read: <b id="io.wal_read"></b></span>
+					<span style="color: red">Write: <b id="io.wal_write"></b></span>
+					<span style="color: black">Await: <b id="io.wal_await"></b></span>
 				</div>
 			</td>
 		</tr>

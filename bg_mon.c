@@ -144,11 +144,11 @@ static void prepares_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, ", \"space\": {\"total\": %llu, \"left\": %llu", d.data_size, d.data_free);
 	evbuffer_add_printf(evb, "}, \"io\": {\"read\": %u, \"write\": %u, ", d.data_read_diff, d.data_write_diff);
 	evbuffer_add_printf(evb, "\"await\": %u}}, \"directory\": {\"name\": \"%s\"", d.data_time_in_queue_diff, d.data_directory);
-	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"xlog\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.xlog_dev);
-	evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, \"io\": ", d.xlog_size, d.xlog_free);
-	evbuffer_add_printf(evb, "{\"read\": %u, \"write\": %u, \"await\": ", d.xlog_read_diff, d.xlog_write_diff);
-	evbuffer_add_printf(evb, "%u}}, \"directory\": {\"name\": \"%s\", ", d.xlog_time_in_queue_diff, d.xlog_directory);
-	evbuffer_add_printf(evb, "\"size\": %llu}}}, \"processes\": [", d.du_xlog);
+	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"wal\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.wal_dev);
+	evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, \"io\": ", d.wal_size, d.wal_free);
+	evbuffer_add_printf(evb, "{\"read\": %u, \"write\": %u, \"await\": ", d.wal_read_diff, d.wal_write_diff);
+	evbuffer_add_printf(evb, "%u}}, \"directory\": {\"name\": \"%s\", ", d.wal_time_in_queue_diff, d.wal_directory);
+	evbuffer_add_printf(evb, "\"size\": %llu}}}, \"processes\": [", d.du_wal);
 
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
@@ -204,8 +204,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 			if (!(err = (fstat(fd, &st) < 0))) {
 				evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/html");
 				evbuffer_add_file(evb, fd, 0, st.st_size);
-			}
-			close(fd);
+			} else close(fd);
 		}
 	}
 
@@ -235,7 +234,7 @@ bg_mon_main(Datum main_arg)
 	struct evhttp *http;
 	struct evhttp_bound_socket *handle;
 
-        pg_start_time = timestamptz_to_time_t(PgStartTime);
+	pg_start_time = timestamptz_to_time_t(PgStartTime);
 
 	/* Establish signal handlers before unblocking signals. */
 	pqsignal(SIGHUP, bg_mon_sighup);

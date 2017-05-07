@@ -22,11 +22,11 @@ typedef struct {
 	bool me_remote;
 } mount_entry;
 
-static const char pg_xlog[] = "pg_xlog";
+static const char pg_wal[] = "pg_xlog";
 extern char *DataDir;
-static char *xlog_directory;
+static char *wal_directory;
 static char *data_dev;
-static char *xlog_dev;
+static char *wal_dev;
 
 static disk_stat disk_stats_old = {0,};
 
@@ -36,9 +36,9 @@ char *memory_cgroup_mount = NULL;
  * implementation of du -s and du -sx functionality for
  * calculating size of data_directory
  * works recursively, returns total size in kilobytes.
- * optionally can calculate size of pg_xlog
+ * optionally can calculate size of pg_wal
  ******************************************************/
-static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned long long *xlog)
+static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned long long *wal)
 {
 	struct stat st;
 	unsigned long long ret = 0;
@@ -68,11 +68,11 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 				|| (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2])))
 				&& strcmp(e->d_name, "lost+found") != 0) {
 
-			if (xlog && !strncmp(e->d_name, pg_xlog, sizeof(pg_xlog))) {
-				*xlog = du(dirfd, e->d_name, 0, NULL);
+			if (wal && !strncmp(e->d_name, pg_wal, sizeof(pg_wal))) {
+				*wal = du(dirfd, e->d_name, 0, NULL);
 				if (fstatat(dirfd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
 					if ((st.st_mode & S_IFMT) == S_IFDIR)
-						ret += *xlog;
+						ret += *wal;
 					else ret += st.st_blocks/2;
 				}
 			} else ret += du(dirfd, e->d_name, dev, NULL);
@@ -266,10 +266,10 @@ static void read_io_stats(disk_stat *stats)
 			++i;
 		}
 
-		if (strcmp(device_name, xlog_dev) == 0) {
-			stats->xlog_sectors_read = sectors_read;
-			stats->xlog_sectors_written = sectors_written;
-			stats->xlog_time_in_queue = time_in_queue;
+		if (strcmp(device_name, wal_dev) == 0) {
+			stats->wal_sectors_read = sectors_read;
+			stats->wal_sectors_written = sectors_written;
+			stats->wal_time_in_queue = time_in_queue;
 			++i;
 		}
 	}
@@ -284,15 +284,15 @@ static void diff_disk_stats(disk_stat *new_stats)
 		disk_stats_old.time.tv_sec - disk_stats_old.time.tv_usec/1000000.0;
 
 	new_stats->data_time_in_queue_diff = (new_stats->data_time_in_queue - disk_stats_old.data_time_in_queue)/time_diff;
-	new_stats->xlog_time_in_queue_diff = (new_stats->xlog_time_in_queue - disk_stats_old.xlog_time_in_queue)/time_diff;
+	new_stats->wal_time_in_queue_diff = (new_stats->wal_time_in_queue - disk_stats_old.wal_time_in_queue)/time_diff;
 
 	time_diff *= 2.0; /* to obtain diffs in kB */
 
 	new_stats->data_read_diff = (new_stats->data_sectors_read - disk_stats_old.data_sectors_read)/time_diff;
 	new_stats->data_write_diff = (new_stats->data_sectors_written - disk_stats_old.data_sectors_written)/time_diff;
 
-	new_stats->xlog_read_diff = (new_stats->xlog_sectors_read - disk_stats_old.xlog_sectors_read)/time_diff;
-	new_stats->xlog_write_diff = (new_stats->xlog_sectors_written - disk_stats_old.xlog_sectors_written)/time_diff;
+	new_stats->wal_read_diff = (new_stats->wal_sectors_read - disk_stats_old.wal_sectors_read)/time_diff;
+	new_stats->wal_write_diff = (new_stats->wal_sectors_written - disk_stats_old.wal_sectors_written)/time_diff;
 }
 
 disk_stat get_diskspace_stats(void)
@@ -301,19 +301,19 @@ disk_stat get_diskspace_stats(void)
 	struct statvfs st;
 	disk_stat disk_stats = {0, };
 
-	disk_stats.du_data = du(AT_FDCWD, DataDir, 0, &disk_stats.du_xlog);
+	disk_stats.du_data = du(AT_FDCWD, DataDir, 0, &disk_stats.du_wal);
 
 	if (statvfs(DataDir, &st) == 0) {
 		disk_stats.data_size = st.f_blocks * st.f_bsize / 1024;
 		disk_stats.data_free = st.f_bavail * st.f_bsize / 1024;
 	}
 
-	if (data_dev == xlog_dev) {
-		disk_stats.xlog_size = disk_stats.data_size;
-		disk_stats.xlog_free = disk_stats.data_free;
-	} else if (statvfs(xlog_directory, &st) == 0) {
-		disk_stats.xlog_size = st.f_blocks * st.f_bsize / 1024;
-		disk_stats.xlog_free = st.f_bavail * st.f_bsize / 1024;
+	if (data_dev == wal_dev) {
+		disk_stats.wal_size = disk_stats.data_size;
+		disk_stats.wal_free = disk_stats.data_free;
+	} else if (statvfs(wal_directory, &st) == 0) {
+		disk_stats.wal_size = st.f_blocks * st.f_bsize / 1024;
+		disk_stats.wal_free = st.f_bavail * st.f_bsize / 1024;
 	}
 
 	read_io_stats(&disk_stats);
@@ -325,8 +325,8 @@ disk_stat get_diskspace_stats(void)
 	disk_stats.data_directory = DataDir;
 	disk_stats.data_dev = data_dev;
 
-	disk_stats.xlog_directory = xlog_directory;
-	disk_stats.xlog_dev = xlog_dev;
+	disk_stats.wal_directory = wal_directory;
+	disk_stats.wal_dev = wal_dev;
 
 	return disk_stats_old = disk_stats;
 }
@@ -335,19 +335,19 @@ void disk_stats_init(void)
 {
 	List *mounts = read_mounts();
 	size_t len = strlen(DataDir);
-	xlog_directory = palloc(len + sizeof(pg_xlog) + 2);
-	strcpy(xlog_directory, DataDir);
-	if (xlog_directory[len - 1] != '/')
-		xlog_directory[len++] = '/';
-	strcpy(xlog_directory + len, pg_xlog);
+	wal_directory = palloc(len + sizeof(pg_wal) + 2);
+	strcpy(wal_directory, DataDir);
+	if (wal_directory[len - 1] != '/')
+		wal_directory[len++] = '/';
+	strcpy(wal_directory + len, pg_wal);
 
 	data_dev = get_device(mounts, DataDir);
 	if (data_dev) data_dev = pstrdup(data_dev);
-	xlog_dev = get_device(mounts, xlog_directory);
-	if (xlog_dev) {
-		if (data_dev && strcmp(data_dev, xlog_dev) == 0)
-			xlog_dev = data_dev;
-		else xlog_dev = pstrdup(xlog_dev);
+	wal_dev = get_device(mounts, wal_directory);
+	if (wal_dev) {
+		if (data_dev && strcmp(data_dev, wal_dev) == 0)
+			wal_dev = data_dev;
+		else wal_dev = pstrdup(wal_dev);
 	}
 
 	free_mounts(mounts);
