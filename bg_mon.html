@@ -64,11 +64,9 @@ function create_chart(name, min_value, scale, values) {
 	chart.streamTo(document.getElementById(chart_name), 0);
 }
 
-function loadJSON(path, success, error)
-{
+function loadJSON(path, success, error) {
 	var xhr = new XMLHttpRequest();
-	xhr.onreadystatechange = function()
-	{
+	xhr.onreadystatechange = function() {
 		if (xhr.readyState === XMLHttpRequest.DONE) {
 			if (xhr.status === 200) {
 				if (success)
@@ -145,11 +143,11 @@ function getValue(data, ns) {
 }
 
 function set_diskstats_values(data, type) {
-		var attrs = ['read', 'write', 'await'];
-		var t = data['disk_stats'][type]['device'];
-		data['io'][type + '_dev'] = t['name'];
-		for (var i = 0; i < attrs.length; ++i)
-			data['io'][type + '_' + attrs[i]] = t['io'][attrs[i]];
+	var attrs = ['read', 'write', 'await'];
+	var t = data['disk_stats'][type]['device'];
+	data['io'][type + '_dev'] = t['name'];
+	for (var i = 0; i < attrs.length; ++i)
+		data['io'][type + '_' + attrs[i]] = t['io'][attrs[i]];
 }
 
 function apply(data, ns) {
