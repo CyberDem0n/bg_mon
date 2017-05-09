@@ -34,14 +34,6 @@ If you did everything right, go to you browser and type following URLs to see re
 
 `http://<bg_mon.listen_address>:<bg_mon.port>/ui` -- simple web page which fetches statistics from server every second and renders it in a simple html format.
 
-Starting from PostgreSQL 9.4 it's possible to start background worker even without cluster restart:
-
-```sql
-create extension bg_mon;
-select bg_mon_launch();
-```
-Although this method does not work on replicas...
-
 
 License
 -------
