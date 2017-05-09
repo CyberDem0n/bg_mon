@@ -1,4 +1,0 @@
-comment = 'Background worker for monitoring postgresql instance from inside'
-default_version = '0.1'
-module_pathname = '$libdir/bg_mon'
-relocatable = true

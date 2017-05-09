@@ -1,3 +1,5 @@
+#include <sys/stat.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <event2/event.h>
 #include <event2/http.h>
@@ -15,21 +17,19 @@
 /* these headers are used by this particular worker's code */
 #include "pgstat.h"
 #include "tcop/utility.h"
+#include "utils/timestamp.h"
 
 #include "postgres_stats.h"
 #include "disk_stats.h"
 #include "system_stats.h"
-#include "index.h"
 
 PG_MODULE_MAGIC;
-
-#if PG_VERSION_NUM >= 90400
-PG_FUNCTION_INFO_V1(bg_mon_launch);
-#endif
 
 void _PG_init(void);
 void bg_mon_main(Datum);
 
+extern TimestampTz PgStartTime;
+pg_time_t pg_start_time;
 extern int MaxConnections;
 extern char *DataDir;
 
@@ -117,32 +117,38 @@ static void prepares_statistics_output(struct evbuffer *evb)
 
 	evbuffer_add_printf(evb, "{\"hostname\": \"%s\", \"sysname\": \"Linux: %s\", ", s.hostname, s.sysname);
 	evbuffer_add_printf(evb, "\"cpu_cores\": %d, \"postgresql\": {\"version\": \"%s\"", c.cpu_count, PG_VERSION);
-	evbuffer_add_printf(evb, ", \"role\": \"%s\", ", pg_stats_current.recovery_in_progress?"standby":"master");
+	evbuffer_add_printf(evb, ", \"role\": \"%s\", ", pg_stats_current.recovery_in_progress?"replica":"master");
 	evbuffer_add_printf(evb, "\"data_directory\": \"%s\", \"connections\": {\"max\": %d", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, ", \"total\": %d, ", pg_stats_current.total_connections);
-	evbuffer_add_printf(evb, "\"active\": %d}}, ", pg_stats_current.active_connections);
+	evbuffer_add_printf(evb, "\"active\": %d}, \"start_time\": %lu}, ", pg_stats_current.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", s.uptime);
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g], \"cpu\": ", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "{\"user\": %2.1f, \"system\": %2.1f, \"idle\": ", c.utime_diff, c.stime_diff);
-	evbuffer_add_printf(evb, "%2.1f}, \"iowait\": %2.1f, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
+	evbuffer_add_printf(evb, "%2.1f, \"iowait\": %2.1f}, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
 	evbuffer_add_printf(evb, ", \"processes\": {\"running\": %lu, \"blocked\": %lu}, ", s.procs_running, s.procs_blocked);
-	evbuffer_add_printf(evb, "\"memory\": {\"total\": %lu, \"free\": %lu, \"buffers\": %lu", m.total, m.free, m.buffers);
-	evbuffer_add_printf(evb, ", \"cached\": %lu, \"dirty\": %lu, \"commit_limit\": %lu, ", m.cached, m.dirty, m.limit);
-	evbuffer_add_printf(evb, "\"committed_as\": %lu", m.as);
+	evbuffer_add_printf(evb, "\"memory\": {\"total\": %lu, \"free\": %lu, ", m.total, m.free);
+	evbuffer_add_printf(evb, "\"buffers\": %lu, \"cached\": %lu, \"dirty\": %lu", m.buffers, m.cached, m.dirty);
+
+	if (m.overcommit.memory == 2) {
+		evbuffer_add_printf(evb, ", \"overcommit\": {\"ratio\": %u, ", m.overcommit.ratio);
+		evbuffer_add_printf(evb, "\"commit_limit\": %lu, \"committed_as\": %lu}", m.limit, m.as);
+	}
+
 	if (m.cgroup.available) {
 		cgroup_memory cm = m.cgroup;
 		evbuffer_add_printf(evb, ", \"cgroup\": {\"limit\": %lu, \"usage\": %lu", cm.limit, cm.usage);
 		evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu}", cm.rss, cm.cache);
 	}
+
 	evbuffer_add_printf(evb, "}}, \"disk_stats\": {\"data\": {\"device\": {\"name\": \"%s\"", d.data_dev);
 	evbuffer_add_printf(evb, ", \"space\": {\"total\": %llu, \"left\": %llu", d.data_size, d.data_free);
 	evbuffer_add_printf(evb, "}, \"io\": {\"read\": %u, \"write\": %u, ", d.data_read_diff, d.data_write_diff);
 	evbuffer_add_printf(evb, "\"await\": %u}}, \"directory\": {\"name\": \"%s\"", d.data_time_in_queue_diff, d.data_directory);
-	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"xlog\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.xlog_dev);
-	evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, \"io\": ", d.xlog_size, d.xlog_free);
-	evbuffer_add_printf(evb, "{\"read\": %u, \"write\": %u, \"await\": ", d.xlog_read_diff, d.xlog_write_diff);
-	evbuffer_add_printf(evb, "%u}}, \"directory\": {\"name\": \"%s\", ", d.xlog_time_in_queue_diff, d.xlog_directory);
-	evbuffer_add_printf(evb, "\"size\": %llu}}}, \"processes\": [", d.du_xlog);
+	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"wal\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.wal_dev);
+	evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, \"io\": ", d.wal_size, d.wal_free);
+	evbuffer_add_printf(evb, "{\"read\": %u, \"write\": %u, \"await\": ", d.wal_read_diff, d.wal_write_diff);
+	evbuffer_add_printf(evb, "%u}}, \"directory\": {\"name\": \"%s\", ", d.wal_time_in_queue_diff, d.wal_directory);
+	evbuffer_add_printf(evb, "\"size\": %llu}}}, \"processes\": [", d.du_wal);
 
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
@@ -182,21 +188,29 @@ static void prepares_statistics_output(struct evbuffer *evb)
 
 static void send_document_cb(struct evhttp_request *req, void *arg)
 {
+	bool err = false;
+
 	const char *uri = evhttp_request_get_uri(req);
 
 	struct evbuffer *evb = evbuffer_new();
 
 	if (strncmp(uri, "/ui", 3)) {
 		prepares_statistics_output(evb);
-
 		evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "application/json");
 	} else {
-		index_html(evb);
-
-		evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/html");
+		int fd = open(UIFILE, O_RDONLY);
+		if (!(err = (fd < 0))) {
+			struct stat st;
+			if (!(err = (fstat(fd, &st) < 0))) {
+				evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/html");
+				evbuffer_add_file(evb, fd, 0, st.st_size);
+			} else close(fd);
+		}
 	}
 
-	evhttp_send_reply(req, 200, "OK", evb);
+	if (err) evhttp_send_error(req, 404, "Document was not found");
+	else evhttp_send_reply(req, 200, "OK", evb);
+
 	evbuffer_free(evb);
 }
 
@@ -220,6 +234,7 @@ bg_mon_main(Datum main_arg)
 	struct evhttp *http;
 	struct evhttp_bound_socket *handle;
 
+	pg_start_time = timestamptz_to_time_t(PgStartTime);
 
 	/* Establish signal handlers before unblocking signals. */
 	pqsignal(SIGHUP, bg_mon_sighup);
@@ -398,48 +413,3 @@ _PG_init(void)
 
 	RegisterBackgroundWorker(&worker);
 }
-
-#if PG_VERSION_NUM >= 90400
-/*
- * Dynamically launch an SPI worker.
- */
-Datum
-bg_mon_launch(PG_FUNCTION_ARGS)
-{
-	BackgroundWorker worker;
-	BackgroundWorkerHandle *handle;
-	BgwHandleStatus status;
-	pid_t		pid;
-
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
-		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_RecoveryFinished;
-	worker.bgw_restart_time = BGW_NEVER_RESTART;
-	worker.bgw_main = NULL;		/* new worker might not have library loaded */
-	sprintf(worker.bgw_library_name, "bg_mon");
-	sprintf(worker.bgw_function_name, "bg_mon_main");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "bg_mon");
-//	worker.bgw_main_arg = Int32GetDatum(i);
-	/* set bgw_notify_pid so that we can use WaitForBackgroundWorkerStartup */
-	worker.bgw_notify_pid = MyProcPid;
-
-	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
-		PG_RETURN_NULL();
-
-	status = WaitForBackgroundWorkerStartup(handle, &pid);
-
-	if (status == BGWH_STOPPED)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-				 errmsg("could not start background process"),
-			   errhint("More details may be available in the server log.")));
-	if (status == BGWH_POSTMASTER_DIED)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-			  errmsg("cannot start background processes without postmaster"),
-				 errhint("Kill all remaining database processes and restart the database.")));
-	Assert(status == BGWH_STARTED);
-
-	PG_RETURN_INT32(pid);
-}
-#endif

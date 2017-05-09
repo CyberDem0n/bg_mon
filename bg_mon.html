@@ -1,0 +1,321 @@
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>bg_mon</title>
+<style type="text/css">
+* {
+	font-size: 14px;
+	font-family: "SFMono-Regular",Consolas,"Liberation Mono",Menlo,Courier,monospace;
+}
+
+body {
+	margin: 0;
+	color: #333;
+}
+
+table {
+	border-collapse: collapse;
+	border-spacing: 0;
+	margin-bottom: 20px;
+	max-width: 100%;
+	width: 100%;
+}
+
+table > tbody > tr > td {
+	border-top: 1px solid #ddd;
+	line-height: 1.42857;
+	padding: 8px;
+	vertical-align: top;
+	text-align: right;
+}
+
+table > thead > tr > th {
+	border-bottom: 2px solid #ddd;
+	vertical-align: bottom;
+	padding: 8px;
+	width: 50px;
+	text-align: right;
+}
+
+table.partitions > thead > tr > th {
+	width: 100px;
+}
+
+table > tbody > tr:nth-of-type(2n+1) {
+	background-color: #f9f9f9;
+}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/smoothie/1.27.0/smoothie.min.js" type="text/javascript"></script>
+<script type="text/javascript">
+var timeSeries = {};
+function create_chart(name, min_value, scale, values) {
+	var chart_name = name + '.chart';
+	var chart = new SmoothieChart({millisPerPixel:1000,maxValueScale:scale,interpolation:'linear',grid:{fillStyle:'#ffffff',millisPerLine:60000,verticalSections:5},labels:{fillStyle:'#000000',disabled:true,fontSize:14,precision:1},timestampFormatter:SmoothieChart.timeFormatter,minValue:min_value});
+
+	timeSeries[chart_name] = {};
+
+	for (var i = 0; i < values.length; ++i) {
+		var color = document.getElementById(name + '.' + values[i]).parentNode.style.color;
+		var ts = new TimeSeries();
+		chart.addTimeSeries(ts, { strokeStyle: color, lineWidth: 1 });
+		timeSeries[chart_name][values[i]] = ts;
+	}
+	chart.streamTo(document.getElementById(chart_name), 0);
+}
+
+function loadJSON(path, success, error) {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState === XMLHttpRequest.DONE) {
+			if (xhr.status === 200) {
+				if (success)
+					success(JSON.parse(xhr.responseText));
+			} else {
+				if (error)
+					error(xhr);
+			}
+		}
+	};
+	xhr.open('GET', path, true);
+	xhr.send();
+}
+
+function process_tmpl(name, data, empty) {
+	var tmpl = document.getElementById(name + '_tmpl');
+	tmpl.style.display = '';
+	var rows = [];
+	for (key in data) {
+		for (var i = 0; i < empty.length; ++i)
+			if (!(empty[i] in data[key]))
+				data[key][empty[i]] = '';
+		apply(data[key], name + '.');
+		rows.push(tmpl.outerHTML);
+	}
+	tmpl.style.display = 'none';
+	return rows.join('');
+}
+
+function humanReadableSize(data) {
+	var sizes = ['KB', 'MB', 'GB', 'TB'];
+	for (a in sizes) {
+		if (data / 1024 < 1)
+			return data.toFixed(1) + sizes[a];
+		data /= 1024;
+	}
+	return data.toFixed(1) + sizes[sizes.length - 1];
+}
+
+function endsWith(str, suffix) {
+	return str.indexOf(suffix, str.length - suffix.length) !== -1;
+}
+
+function getValue(data, ns) {
+	if (ns == 'disk_stats')
+		return process_tmpl('disk_stats', data, []);
+	else if (ns == 'processes')
+		return process_tmpl('processes', data, ['database', 'username', 'query', 'locked_by']);
+	else if (ns == 'system_stats.uptime') {
+		var ret = '';
+		var days = Math.floor(data / 86400);
+		if (days > 0) {
+			ret += days + ' day';
+			if (days > 1) ret += 's';
+			ret += ' ';
+		}
+		return ret + new Date(data * 1000).toISOString().slice(-13, -5);
+	} else if (ns == 'postgresql.start_time')
+		return new Date(data * 1000).toISOString();
+
+	if (ns.indexOf('processes.cpu.') === 0 || ns.indexOf('processes.io.') === 0
+			|| ns.indexOf('system_stats.cpu.') === 0)
+		return data.toFixed(1)
+	else if (ns.indexOf('system_stats.load_average.') === 0)
+		return data.toFixed(2)
+	else if (ns.indexOf('io.') === 0 && (endsWith(ns, '_read') || endsWith(ns, '_write'))
+			|| ns.indexOf('.io.') > -1 && !endsWith(ns, '.io.await'))
+		return humanReadableSize(data) + '/s';
+	else if (ns.indexOf('.memory.') > -1 || ns.indexOf('.space.') > -1
+			|| ns == 'disk_stats.directory.size' || ns == 'processes.uss')
+		return humanReadableSize(data);
+	else
+		return data;
+}
+
+function set_diskstats_values(data, type) {
+	var attrs = ['read', 'write', 'await'];
+	var t = data['disk_stats'][type]['device'];
+	data['io'][type + '_dev'] = t['name'];
+	for (var i = 0; i < attrs.length; ++i)
+		data['io'][type + '_' + attrs[i]] = t['io'][attrs[i]];
+}
+
+function apply(data, ns) {
+	if (ns == '') {
+		data['io'] = {};
+		set_diskstats_values(data, 'data')
+		if (data['io']['data_dev'] == data['disk_stats']['wal']['device']['name']) {
+			var el = document.getElementById('io.wal_tmpl');
+			if (el != null) el.style.display = 'none';
+		} else
+			set_diskstats_values(data, 'wal');
+	}
+
+	for (var key in data) {
+		var ns_key = ns + key;
+		var el = document.getElementById(ns_key);
+		if (el != null)
+			el.innerHTML = getValue(data[key], ns_key);
+		else if (typeof(data[key]) == 'object') {
+			var cn = ns_key + '.chart';
+			if (cn in timeSeries) {
+				var t = new Date().getTime();
+				if (ns_key == 'system_stats.cpu')
+					data[key]['total'] = 100 - data[key]['idle'];
+				else if (ns_key == 'system_stats.memory') {
+					data[key]['cache'] = data[key]['buffers'] + data[key]['cached'];
+					data[key]['used'] = data[key]['total'] - data[key]['free'] - data[key]['cache'];
+					data[key]['free'] += data[key]['cache'];
+				}
+				for (var n in timeSeries[cn])
+					timeSeries[cn][n].append(t, data[key][n]);
+			}
+			apply(data[key], ns_key + '.');
+		}
+	}
+}
+
+function on_resize() {
+	var w = (window.innerWidth - 40)/2;
+	if (w < 600) w = 600;
+	for (var n in timeSeries)
+		document.getElementById(n).width = w;
+}
+
+function body_loaded() {
+	create_chart('system_stats.cpu', -10, 1.2, ['total', 'user', 'system', 'iowait']);
+	create_chart('system_stats.load_average', -1, 2, ['0', '1', '2']);
+	create_chart('system_stats.memory', -1, 1.2, ['used', 'free', 'cache']);
+	create_chart('io', -100, 1.2, ['data_read', 'data_write', 'wal_read', 'wal_write']);
+	on_resize();
+
+	setInterval(function() {
+		loadJSON('/', function(data) {apply(data, '')}, alert);
+	}, 1000);
+}
+</script>
+</head>
+<body onLoad="body_loaded()" onResize="on_resize()">
+<b id="hostname"></b>, up <b id="system_stats.uptime"></b>, <b id="sysname"></b>, <b id="cpu_cores"></b> cores, running processes: <b id="system_stats.processes.running"></b>, blocked processes: <b id="system_stats.processes.blocked"></b>, ctxt <b id="system_stats.ctxt"></b> 
+<table>
+	<thead>
+		<tr>
+			<th><canvas id="system_stats.cpu.chart" width="600" height="120"></canvas></th>
+			<th><canvas id="system_stats.load_average.chart" width="600" height="120"></canvas></th>
+		</tr>
+		<tr>
+			<td><b>CPU:</b>
+				<span style="color: black">Idle <b id="system_stats.cpu.idle"></b>%</span>
+				<span style="color: blue">System <b id="system_stats.cpu.system"></b>%</span>
+				<span style="color: green">User <b id="system_stats.cpu.user"></b>%</span>
+				<span style="color: orange">Total <b id="system_stats.cpu.total"></b>%</span>
+				<span style="color: red">IOWait <b id="system_stats.cpu.iowait"></b>%</span>
+			</td>
+			<td><b>Load average:</b>
+				<span style="color: black">1 min <b id="system_stats.load_average.0"></b></span>
+				<span style="color: orange">5 min <b id="system_stats.load_average.1"></b></span>
+				<span style="color: red">15 min <b id="system_stats.load_average.2"></b></span>
+			</td>
+		</tr>
+		<tr>
+			<th><canvas id="system_stats.memory.chart" width="600" height="120"></canvas></th>
+			<th><canvas id="io.chart" width="600" height="120"></canvas></th>
+		</tr>
+		<tr>
+			<td><b>Mem:</b>
+				<span style="color: black">Total <b id="system_stats.memory.total"></b></span>
+				<span style="color: blue">Used <b id="system_stats.memory.used"></b></span>
+				<span style="color: green">Free <b id="system_stats.memory.free"></b></span>
+				<span style="color: orange">Buffers+Cache <b id="system_stats.memory.cache"></b></span><br>
+				<span style="color: black">Dirty <b id="system_stats.memory.dirty"></b></span>
+				<span style="color: black">Limit <b id="system_stats.memory.overcommit.commit_limit"></b> as <b id="system_stats.memory.overcommit.committed_as"></b></span>
+			</td>
+			<td>
+				<span style="color: black">data/<b id="io.data_dev"></b>:</span>
+				<span style="color: green">Read: <b id="io.data_read"></b></span>
+				<span style="color: orange">Write: <b id="io.data_write"></b></span>
+				<span style="color: black">Await: <b id="io.data_await"></b></span>
+				<div id="io.wal_tmpl">
+					<span style="color: black">wal/<b id="io.wal_dev"></b>:</span>
+					<span style="color: blue">Read: <b id="io.wal_read"></b></span>
+					<span style="color: red">Write: <b id="io.wal_write"></b></span>
+					<span style="color: black">Await: <b id="io.wal_await"></b></span>
+				</div>
+			</td>
+		</tr>
+	</thead>
+</table>
+<h2>Partitions</h2>
+<table class="partitions">
+	<thead>
+		<tr>
+			<th>Device</th>
+			<th>Await</th>
+			<th>Read</th>
+			<th>Write</th>
+			<th>Total</th>
+			<th>Free</th>
+			<th>Size</th>
+			<th style="text-align: left; width: auto">Path</th>
+		</tr>
+	</thead>
+	<tbody id="disk_stats"></tbody>
+	<tr id="disk_stats_tmpl">
+		<td id="disk_stats.device.name"></td>
+		<td id="disk_stats.device.io.await"></td>
+		<td id="disk_stats.device.io.read"></td>
+		<td id="disk_stats.device.io.write"></td>
+		<td id="disk_stats.device.space.total"></td>
+		<td id="disk_stats.device.space.left"></td>
+		<td id="disk_stats.directory.size"></td>
+		<td id="disk_stats.directory.name" style="text-align: left"></td>
+	</tr>
+</table>
+
+<h2><b id="postgresql.role"></b>, <b id="postgresql.version"></b>, started <b id="postgresql.start_time"></b>, connections <b id="postgresql.connections.active"></b>/<b id="postgresql.connections.total"></b> of maximum <b id="postgresql.connections.max"></b></h2>
+<table>
+	<thead>
+		<tr>
+			<th>Pid</th>
+			<th>Lock</th>
+			<th style="width: 160px">Type</th>
+			<th>State</th><th>utime</th>
+			<th>stime</th>
+			<th>Read</th>
+			<th>Write</th>
+			<th>uss</th>
+			<th>Age</th>
+			<th style="text-align: left; width: 110px">Database</th>
+			<th style="text-align: left; width: 110px">User</th>
+			<th style="text-align: left; width: auto">Query</th>
+		</tr>
+	</thead>
+	<tbody id="processes"></tbody>
+	<tr id="processes_tmpl">
+		<td id="processes.pid"></td>
+		<td id="processes.locked_by"></td>
+		<td id="processes.type"></td>
+		<td id="processes.state"></td>
+		<td id="processes.cpu.user"></td>
+		<td id="processes.cpu.system"></td>
+		<td id="processes.io.read"></td>
+		<td id="processes.io.write"></td>
+		<td id="processes.uss"></td>
+		<td id="processes.age"></td>
+		<td id="processes.database" style="text-align: left"></td>
+		<td id="processes.username" style="text-align: left"></td>
+		<td id="processes.query" style="text-align: left"></td>
+	</tr>
+</table>
+</body>
+</html>

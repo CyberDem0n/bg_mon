@@ -1,8 +1,9 @@
 MODULE_big = bg_mon
-OBJS = bg_mon.o postgres_stats.o disk_stats.o system_stats.o index.o
-
-EXTENSION = bg_mon
-DATA = bg_mon--0.1.sql
+OBJS = bg_mon.o postgres_stats.o disk_stats.o system_stats.o
+UIFILENAME = bg_mon.html
+PG_CPPFLAGS = -DUIFILE='"$(DESTDIR)$(datadir)/$(datamoduledir)/$(UIFILENAME)"'
+DATA = $(UIFILENAME)
+PGFILEDESC = 'Background worker for monitoring postgresql instance from inside'
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
@@ -16,6 +17,3 @@ include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
 SHLIB_LINK += -levent -pthread
-
-index.c: index.h index.html index.sh
-	bash index.sh
