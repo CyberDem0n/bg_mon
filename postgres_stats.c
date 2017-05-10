@@ -12,15 +12,13 @@
 #include "pgstat.h"
 #include "utils/snapmgr.h"
 
+#include "system_stats.h"
 #include "postgres_stats.h"
-
-#define FREE(v) do {if (v != NULL) {pfree(v); v = NULL;}} while(0)
 
 extern pid_t PostmasterPid;
 extern int MaxBackends;
 
 static unsigned long long mem_page_size;
-static double SC_CLK_TCK;
 static StringInfoData pg_stat_activity_query;
 
 typedef struct {

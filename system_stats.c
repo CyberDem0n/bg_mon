@@ -1,12 +1,9 @@
-#include <sys/time.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
 #include "postgres.h"
 
 #include "system_stats.h"
-
-#define FREE(v) do {if (v != NULL) {pfree(v); v = NULL;}} while(0)
 
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
 
@@ -169,12 +166,16 @@ static system_stat read_proc_stat(void)
 		if (sscanf(buf, "%31s %llu", param, &value) == 2) {
 			if (strcmp(param, "cpu") == 0) {
 				cpu_stat *cs = &st.cpu;
-				cs->fields = sscanf(buf, "%*s %llu %*u %llu %llu %llu %llu %llu %llu %llu",
-					&cs->utime, &cs->stime, &cs->idle, &cs->iowait, &cs->irq,
-					&cs->softirq, &cs->steal, &cs->guest);
+				cs->fields = sscanf(buf, "%*s %llu %llu %llu %llu %llu %llu %llu %llu",
+					&cs->utime, &cs->ntime, &cs->stime, &cs->idle, &cs->iowait, &cs->irq, &cs->softirq, &cs->steal);
 
-				cs->total = cs->utime + cs->stime + cs->idle + cs->iowait
-							+ cs->irq + cs->softirq + cs->steal + cs->guest;
+				cs->uptime = cs->utime + cs->ntime + cs->stime + cs->idle
+							+ cs->iowait + cs->irq + cs->softirq + cs->steal;
+			} else if (!st.cpu.uptime0 && strncmp(param, "cpu", 3) == 0) {
+				unsigned long long utime, ntime, stime, idle, iowait, irq, softirq, steal;
+				sscanf(buf, "%*s %llu %llu %llu %llu %llu %llu %llu %llu",
+					&utime, &ntime, &stime, &idle, &iowait, &irq, &softirq, &steal);
+				st.cpu.uptime0 = utime + ntime + stime + idle + iowait + irq + softirq + steal;
 			} else if (strcmp(param, "ctxt") == 0)
 				st.ctxt = value;
 			else if (strcmp(param, "procs_running") == 0)
@@ -198,35 +199,38 @@ static char *get_hostname()
 
 static void diff_system_stats(system_stat *new_stats)
 {
-	double time_diff;
-	if (system_stats_old.time.tv_sec == 0) return;
-	time_diff = new_stats->time.tv_sec + new_stats->time.tv_usec/1000000.0 -
-		system_stats_old.time.tv_sec - system_stats_old.time.tv_usec/1000000.0;
+	unsigned long long itv;
+	if (system_stats_old.cpu.uptime == 0) return;
+	itv = new_stats->cpu.uptime - system_stats_old.cpu.uptime;
+	
+	new_stats->cpu.utime_diff = SP_VALUE(system_stats_old.cpu.utime, new_stats->cpu.utime, itv);
+	new_stats->cpu.ntime_diff = SP_VALUE(system_stats_old.cpu.ntime, new_stats->cpu.ntime, itv);
 
-	new_stats->ctxt_diff = (new_stats->ctxt - system_stats_old.ctxt)/time_diff;
+	/* Time spent in system mode also includes time spent servicing hard and soft interrupts. */
+	new_stats->cpu.stime_diff = SP_VALUE(system_stats_old.cpu.stime + system_stats_old.cpu.irq
+		+ system_stats_old.cpu.softirq, new_stats->cpu.stime + new_stats->cpu.irq + new_stats->cpu.softirq, itv);
 
-	time_diff = (new_stats->cpu.total - system_stats_old.cpu.total)/100.0;
-	new_stats->cpu.utime_diff = (new_stats->cpu.utime - system_stats_old.cpu.utime)/time_diff;
-	new_stats->cpu.stime_diff = (new_stats->cpu.stime - system_stats_old.cpu.stime)/time_diff;
-	new_stats->cpu.idle_diff = (new_stats->cpu.idle - system_stats_old.cpu.idle)/time_diff;
-	new_stats->cpu.iowait_diff = (new_stats->cpu.iowait - system_stats_old.cpu.iowait)/time_diff;
-	new_stats->cpu.irq_diff = (new_stats->cpu.irq - system_stats_old.cpu.irq)/time_diff;
-	new_stats->cpu.softirq_diff = (new_stats->cpu.softirq - system_stats_old.cpu.softirq)/time_diff;
-	new_stats->cpu.steal_diff = (new_stats->cpu.steal - system_stats_old.cpu.steal)/time_diff;
-	new_stats->cpu.guest_diff = (new_stats->cpu.guest - system_stats_old.cpu.guest)/time_diff;
+	new_stats->cpu.iowait_diff = SP_VALUE(system_stats_old.cpu.iowait, new_stats->cpu.iowait, itv);
+	new_stats->cpu.steal_diff = SP_VALUE(system_stats_old.cpu.steal, new_stats->cpu.steal, itv);
+
+	new_stats->cpu.idle_diff = new_stats->cpu.idle < system_stats_old.cpu.idle ? 0.0:
+		SP_VALUE(system_stats_old.cpu.idle, new_stats->cpu.idle, itv);
+
+	if (new_stats->cpu.cpu_count > 1) itv = new_stats->uptime - system_stats_old.uptime;
+	new_stats->ctxt_diff = S_VALUE(system_stats_old.ctxt, new_stats->ctxt, itv);
 }
 
 system_stat get_system_stats(void)
 {
-	struct timezone tz;
 	system_stat system_stats = read_proc_stat();
 	system_stats.cpu.cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
 	system_stats.uptime = proc_read_int("/proc/uptime");
+	if (system_stats.uptime == 0)
+		system_stats.uptime = system_stats.cpu.uptime0;
 	system_stats.load_avg = read_load_avg();
 	system_stats.mem = read_meminfo();
 	system_stats.sysname = sysname;
 	system_stats.hostname = get_hostname();
-	gettimeofday(&system_stats.time, &tz);
 	diff_system_stats(&system_stats);
 	return system_stats_old = system_stats;
 }
