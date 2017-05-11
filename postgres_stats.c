@@ -15,6 +15,8 @@
 #include "system_stats.h"
 #include "postgres_stats.h"
 
+extern system_stat system_stats_old;
+
 extern pid_t PostmasterPid;
 extern int MaxBackends;
 
@@ -137,7 +139,7 @@ static proc_stat read_proc_stat(pid_t pid)
 %*u %*u %lu %lu %*d %*d %ld %*d %*d %*d %llu %lu %ld %*u %*u %*u %*u %*u %*u \
 %*u %*u %*u %*u %*u %*u %*u %*d %*d %*u %*u %llu %lu", &ps.pid, &ps.state,
 		&ps.ppid, &ps.utime, &ps.stime, &ps.priority, &ps.start_time, &ps.vsize,
-		&ps.rss, &ps.delayacct_blkio_ticks, &ps.guest_time);
+		&ps.rss, &ps.delayacct_blkio_ticks, &ps.gtime);
 
 	if (ps.fields < 9) {
 		elog(DEBUG1, "Can't parse content of /proc/%d/stat", pid);
@@ -277,31 +279,28 @@ static void read_proc_cmdline(pg_stat *stat)
 	fclose(f);
 }
 
-static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, double time_diff)
+static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, unsigned long long itv)
 {
 	proc_stat *o = &old_stat->ps;
 	proc_stat *n = &new_stat->ps;
 	if (n->fields < 9) return;
 
-	n->delayacct_blkio_ticks_diff = (n->delayacct_blkio_ticks - o->delayacct_blkio_ticks)/time_diff;
-	n->io.read_diff = (n->io.read_bytes - o->io.read_bytes)/time_diff/1024;
-	n->io.write_diff = (n->io.write_bytes - o->io.write_bytes)/time_diff/1024;
+	n->delayacct_blkio_ticks_diff = S_VALUE(o->delayacct_blkio_ticks, n->delayacct_blkio_ticks, itv);
+	n->io.read_diff = S_VALUE(o->io.read_bytes, n->io.read_bytes, itv) / 1024;
+	n->io.write_diff = S_VALUE(o->io.write_bytes, n->io.write_bytes, itv) / 1024;
 
-	time_diff *= SC_CLK_TCK;
-
-	n->utime_diff = (n->utime - o->utime)/time_diff;
-	n->stime_diff = (n->stime - o->stime)/time_diff;
-	n->guest_time_diff = (n->guest_time - o->guest_time)/time_diff;
+	n->utime_diff = SP_VALUE_100(o->utime, n->utime, itv);
+	n->stime_diff = SP_VALUE_100(o->stime, n->stime, itv);
+	n->gtime_diff = SP_VALUE_100(o->gtime, n->gtime, itv);
 }
 
 static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 {
-	double time_diff;
+	unsigned long long itv;
 	size_t old_pos = 0, new_pos = 0;
 
-	if (old_stats.time.tv_sec == 0) return;
-	time_diff = new_stats.time.tv_sec + new_stats.time.tv_usec/1000000.0 -
-				old_stats.time.tv_sec - old_stats.time.tv_usec/1000000.0;
+	if (old_stats.uptime == 0) return;
+	itv = new_stats.uptime - old_stats.uptime;
 
 	while (old_pos < old_stats.pos || new_pos < new_stats.pos) {
 		if (new_pos >= new_stats.pos)
@@ -322,7 +321,7 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 				read_proc_cmdline(new_stats.values + new_pos);
 			}
 
-			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, time_diff);
+			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, itv);
 		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid) {
 			if (!new_stats.values[new_pos].is_backend)
 				read_proc_cmdline(new_stats.values + new_pos);
@@ -334,7 +333,6 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 
 static void get_pg_stat_activity(pg_stat_list *pg_stats)
 {
-	struct timezone tz;
 	int ret;
 	MemoryContext uppercxt = CurrentMemoryContext;
 
@@ -390,7 +388,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	SPI_finish();
 	PopActiveSnapshot();
 	CommitTransactionCommand();
-	gettimeofday(&pg_stats->time, &tz);
+	pg_stats->uptime = system_stats_old.uptime;
 }
 
 pg_stat_list get_postgres_stats(void)
@@ -417,7 +415,6 @@ pg_stat_list get_postgres_stats(void)
 void postgres_stats_init(void)
 {
 	mem_page_size = getpagesize() / 1024;
-	SC_CLK_TCK = sysconf(_SC_CLK_TCK);
 	pg_stat_list_init(&pg_stats_current);
 	pg_stat_list_init(&pg_stats_new);
 

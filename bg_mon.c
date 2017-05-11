@@ -45,7 +45,7 @@ static char *bg_mon_listen_address;
 static int bg_mon_port = 8080;
 
 static pg_stat_list pg_stats_current;
-static disk_stat diskspace_stats_current;
+static disk_stats diskspace_stats_current;
 static system_stat system_stats_current;
 
 static void report_stats()
@@ -102,14 +102,14 @@ static void prepares_statistics_output(struct evbuffer *evb)
 {
 	bool is_first = true;
 	size_t i;
-	disk_stat d;
+	disk_stats ds;
 	system_stat s;
 	cpu_stat c;
 	meminfo m;
 	load_avg la;
 
 	pthread_mutex_lock(&lock);
-	d = diskspace_stats_current;
+	ds = diskspace_stats_current;
 	s = system_stats_current;
 	c = s.cpu;
 	m = s.mem;
@@ -121,7 +121,7 @@ static void prepares_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, "\"data_directory\": \"%s\", \"connections\": {\"max\": %d", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, ", \"total\": %d, ", pg_stats_current.total_connections);
 	evbuffer_add_printf(evb, "\"active\": %d}, \"start_time\": %lu}, ", pg_stats_current.active_connections, pg_start_time);
-	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", s.uptime);
+	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", (int)(s.uptime / SC_CLK_TCK));
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g], \"cpu\": ", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "{\"user\": %2.1f, \"system\": %2.1f, \"idle\": ", c.utime_diff, c.stime_diff);
 	evbuffer_add_printf(evb, "%2.1f, \"iowait\": %2.1f}, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
@@ -140,15 +140,27 @@ static void prepares_statistics_output(struct evbuffer *evb)
 		evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu}", cm.rss, cm.cache);
 	}
 
-	evbuffer_add_printf(evb, "}}, \"disk_stats\": {\"data\": {\"device\": {\"name\": \"%s\"", d.data_dev);
-	evbuffer_add_printf(evb, ", \"space\": {\"total\": %llu, \"left\": %llu", d.data_size, d.data_free);
-	evbuffer_add_printf(evb, "}, \"io\": {\"read\": %u, \"write\": %u, ", d.data_read_diff, d.data_write_diff);
-	evbuffer_add_printf(evb, "\"await\": %u}}, \"directory\": {\"name\": \"%s\"", d.data_time_in_queue_diff, d.data_directory);
-	evbuffer_add_printf(evb, ", \"size\": %llu}}, \"wal\": {\"device\": {\"name\": \"%s\", ", d.du_data, d.wal_dev);
-	evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, \"io\": ", d.wal_size, d.wal_free);
-	evbuffer_add_printf(evb, "{\"read\": %u, \"write\": %u, \"await\": ", d.wal_read_diff, d.wal_write_diff);
-	evbuffer_add_printf(evb, "%u}}, \"directory\": {\"name\": \"%s\", ", d.wal_time_in_queue_diff, d.wal_directory);
-	evbuffer_add_printf(evb, "\"size\": %llu}}}, \"processes\": [", d.du_wal);
+	evbuffer_add_printf(evb, "}}, \"disk_stats\": {");
+	for (i = 0; i < ds.size; ++i) {
+		disk_stat d = ds.values[i];
+		if (is_first) is_first = false;
+		else evbuffer_add_printf(evb, ", ");
+		evbuffer_add_printf(evb, "\"%s\": {\"device\": {\"name\": \"%s\", ", d.type, d.device);
+		evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, ", d.size, d.free);
+		evbuffer_add_printf(evb, "\"io\": {\"read\": %.2f, \"reads_ps\": %.2f", d.read_diff, d.read_completed_diff);
+		evbuffer_add_printf(evb, ", \"write\": %.2f, \"writes_ps\": %.2f", d.write_diff, d.write_completed_diff);
+		if (d.extended) {
+			evbuffer_add_printf(evb, ", \"read_merges\": %.2f, \"write_merges\": %.2f", d.read_merges_diff, d.write_merges_diff);
+			evbuffer_add_printf(evb, ", \"average_queue_length\": %.2f", d.average_queue_length);
+			evbuffer_add_printf(evb, ", \"average_request_size\": %.2f", d.average_request_size);
+			evbuffer_add_printf(evb, ", \"average_service_time\": %.2f", d.average_service_time);
+			evbuffer_add_printf(evb, ", \"await\": %.2f, \"read_await\": %.2f", d.await, d.read_await);
+			evbuffer_add_printf(evb, ", \"write_await\": %.2f, \"util\": %.2f", d.write_await, d.util);
+		}
+		evbuffer_add_printf(evb, "}}, \"directory\": {\"name\": \"%s\", \"size\": %llu}}", d.directory, d.du);
+	}
+	is_first = true;
+	evbuffer_add_printf(evb, "}, \"processes\": [");
 
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
@@ -160,7 +172,7 @@ static void prepares_statistics_output(struct evbuffer *evb)
 			else evbuffer_add_printf(evb, ", ");
 			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": \"%s\", \"state\": \"%c\", ", s.pid, type, ps.state);
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
-			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.guest_time_diff, io.read_diff);
+			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
 			if (s.is_backend) {
 				if (s.locked_by != NULL)
@@ -326,15 +338,15 @@ restart:
 		}
 
 		{
-			disk_stat d =  get_diskspace_stats();
-			pg_stat_list p = get_postgres_stats();
 			system_stat s = get_system_stats();
+			pg_stat_list p = get_postgres_stats();
+			disk_stats d =  get_disk_stats();
 
 			pthread_mutex_lock(&lock);
 
-			diskspace_stats_current = d;
-			pg_stats_current = p;
 			system_stats_current = s;
+			pg_stats_current = p;
+			diskspace_stats_current = d;
 
 			pthread_mutex_unlock(&lock);
 		}

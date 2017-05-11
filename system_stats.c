@@ -14,7 +14,21 @@ static int memory_cgroup_len = 0;
 static char *sysname = "Linux";
 static char *nodename = NULL;
 
-static system_stat system_stats_old;
+system_stat system_stats_old;
+
+static unsigned long long proc_read_uptime()
+{
+	unsigned long long ret = 0;
+	unsigned long sec, cent;
+	FILE *f = fopen("/proc/uptime", "r");
+	if (f != NULL) {
+		if (fscanf(f, "%lu.%lu", &sec, &cent) == 2)
+			ret = (unsigned long long) sec * SC_CLK_TCK +
+				(unsigned long long) cent * SC_CLK_TCK / 100;
+		fclose(f);
+	}
+	return ret;
+}
 
 static int proc_read_int(const char *name)
 {
@@ -224,7 +238,7 @@ system_stat get_system_stats(void)
 {
 	system_stat system_stats = read_proc_stat();
 	system_stats.cpu.cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
-	system_stats.uptime = proc_read_int("/proc/uptime");
+	system_stats.uptime = proc_read_uptime();
 	if (system_stats.uptime == 0)
 		system_stats.uptime = system_stats.cpu.uptime0;
 	system_stats.load_avg = read_load_avg();
@@ -238,6 +252,8 @@ system_stat get_system_stats(void)
 void system_stats_init(void)
 {
 	struct utsname un;
+	SC_CLK_TCK = sysconf(_SC_CLK_TCK);
+
 	if (uname(&un) == 0)
 		sysname = pstrdup(un.release);
 
