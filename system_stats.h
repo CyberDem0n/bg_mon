@@ -1,6 +1,14 @@
 #ifndef _SYSTEM_STATS_H_
 #define _SYSTEM_STATS_H_
 
+double SC_CLK_TCK;
+
+#define MINIMUM(a,b)		((a) < (b) ? (a) : (b))
+#define FREE(v)				do {if (v != NULL) {pfree(v); v = NULL;}} while(0)
+#define S_VALUE(m,n,p)		(((double) ((n) - (m))) / (p) * SC_CLK_TCK)
+#define SP_VALUE(m,n,p)		(n < m ? 0 : ((double) ((n) - (m))) / (p) * 100)
+#define SP_VALUE_100(m,n,p)	MINIMUM((((double) ((n) - (m))) / (p) * 100), 100.0)
+
 typedef char bool;
 
 typedef struct {
@@ -40,6 +48,8 @@ typedef struct {
 	int cpu_count;
 	unsigned long long utime; // (1)
 	double utime_diff;
+	unsigned long long ntime; // (2)
+	double ntime_diff;
 	unsigned long long stime; // (3)
 	double stime_diff;
 	unsigned long long idle; // (4)
@@ -47,14 +57,11 @@ typedef struct {
 	unsigned long long iowait; // (5)
 	double iowait_diff;
 	unsigned long long irq; // (6)
-	double irq_diff;
 	unsigned long long softirq; // (7)
-	double softirq_diff;
 	unsigned long long steal; // (8)
 	double steal_diff;
-	unsigned long long guest; // (9)
-	double guest_diff;
-	unsigned long long total;
+	unsigned long long uptime;
+	unsigned long long uptime0;
 } cpu_stat;
 
 typedef struct {
@@ -66,7 +73,6 @@ typedef struct {
 	int uptime;
 	load_avg load_avg;
 	meminfo mem;
-	struct timeval time;
 	char *sysname;
 	char *hostname;
 } system_stat;

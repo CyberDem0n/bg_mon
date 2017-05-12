@@ -2,7 +2,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
-#include <sys/time.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -10,9 +9,14 @@
 
 #include "tcop/utility.h"
 
+#include "system_stats.h"
 #include "disk_stats.h"
 
-#define FREE(v) do {if (v != NULL) {pfree(v); v = NULL;}} while(0)
+const int DATA = 0;
+const int WAL = 1;
+#define DISK_DEVICES 2
+
+extern system_stat system_stats_old;
 
 typedef struct {
 	char *me_devname;
@@ -28,7 +32,7 @@ static char *wal_directory;
 static char *data_dev;
 static char *wal_dev;
 
-static disk_stat disk_stats_old = {0,};
+static disk_stats disk_stats_old = {0,};
 
 char *memory_cgroup_mount = NULL;
 
@@ -249,86 +253,128 @@ static char *get_device(List *mounts, const char *path)
 	return best_match->me_devname; 
 }
 
-static void read_io_stats(disk_stat *stats)
+static void read_io_stats(disk_stats *ds)
 {
-	int i = 0;
-	char device_name[255];
-	unsigned long sectors_read, sectors_written;
-	unsigned int time_in_queue;
+	int n, i = 0;
+	char buf[256], device_name[128];
+	unsigned long read_completed, read_merges_or_read_sectors;
+	unsigned long read_sectors_or_write_completed, read_time_or_write_sectors;
+	unsigned long write_completed, write_merges, write_sectors;
+	unsigned int ios_in_progress, write_time, total_time, weighted_time;
+	disk_stat *stats = ds->values;
 	FILE *io = fopen("/proc/diskstats", "r");
 
-	while (i < 2 && fscanf(io, "%*d %*d %s %*u %*u %lu %*u %*u %*u %lu %*u %*u %*u %u\n",
-			device_name, &sectors_read, &sectors_written, &time_in_queue) == 4) {
-		if (strcmp(device_name, data_dev) == 0) {
-			stats->data_sectors_read = sectors_read;
-			stats->data_sectors_written = sectors_written;
-			stats->data_time_in_queue = time_in_queue;
-			++i;
-		}
+	if (io == NULL) return;
 
-		if (strcmp(device_name, wal_dev) == 0) {
-			stats->wal_sectors_read = sectors_read;
-			stats->wal_sectors_written = sectors_written;
-			stats->wal_time_in_queue = time_in_queue;
-			++i;
-		}
+	while (i < ds->size && fgets(buf, sizeof(buf), io)) {
+		n = sscanf(buf, "%*u %*u %s %lu %lu %lu %lu %lu %lu %lu %u %u %u %u",
+					device_name, &read_completed, &read_merges_or_read_sectors,
+					&read_sectors_or_write_completed, &read_time_or_write_sectors,
+					&write_completed, &write_merges, &write_sectors, &write_time,
+					&ios_in_progress, &total_time, &weighted_time);
+		if (n == 12) {
+			for (n = 0; n < ds->size; ++n) {
+				if (strcmp(stats[n].device, device_name) == 0) {
+					stats[n].read_completed = read_completed;
+					stats[n].read_merges = read_merges_or_read_sectors;
+					stats[n].read_sectors = read_sectors_or_write_completed;
+					stats[n].read_time = (unsigned int)read_time_or_write_sectors;
+					stats[n].write_completed = write_completed;
+					stats[n].write_merges = write_merges;
+					stats[n].write_sectors = write_sectors;
+					stats[n].write_time = write_time;
+					stats[n].ios_in_progress = ios_in_progress;
+					stats[n].total_time = total_time;
+					stats[n].weighted_time = weighted_time;
+					stats[n].extended = 1;
+				}
+			}
+		} else if (n == 5) {
+			for (n = 0; n < ds->size; ++n) {
+				if (strcmp(stats[n].device, device_name) == 0) {
+					stats[n].read_completed = read_completed;
+					stats[n].read_sectors = read_merges_or_read_sectors;
+					stats[n].write_completed = read_sectors_or_write_completed;
+					stats[n].write_sectors = read_time_or_write_sectors;
+				}
+			}
+		} else continue;
 	}
 	fclose(io);
 }
 
-static void diff_disk_stats(disk_stat *new_stats)
+static void diff_disk_stats(disk_stats *new_stats)
 {
-	double time_diff;
-	if (disk_stats_old.time.tv_sec == 0) return;
-	time_diff = new_stats->time.tv_sec + new_stats->time.tv_usec/1000000.0 -
-		disk_stats_old.time.tv_sec - disk_stats_old.time.tv_usec/1000000.0;
+	int i;
+	unsigned long long itv;
+	if (disk_stats_old.uptime == 0) return;
 
-	new_stats->data_time_in_queue_diff = (new_stats->data_time_in_queue - disk_stats_old.data_time_in_queue)/time_diff;
-	new_stats->wal_time_in_queue_diff = (new_stats->wal_time_in_queue - disk_stats_old.wal_time_in_queue)/time_diff;
+	itv = new_stats->uptime - disk_stats_old.uptime;
 
-	time_diff *= 2.0; /* to obtain diffs in kB */
+	for (i = 0; i < new_stats->size; ++i) {
+		disk_stat o = disk_stats_old.values[i];
+		disk_stat *n = new_stats->values + i;
 
-	new_stats->data_read_diff = (new_stats->data_sectors_read - disk_stats_old.data_sectors_read)/time_diff;
-	new_stats->data_write_diff = (new_stats->data_sectors_written - disk_stats_old.data_sectors_written)/time_diff;
-
-	new_stats->wal_read_diff = (new_stats->wal_sectors_read - disk_stats_old.wal_sectors_read)/time_diff;
-	new_stats->wal_write_diff = (new_stats->wal_sectors_written - disk_stats_old.wal_sectors_written)/time_diff;
+		if (n->extended && o.extended) {
+			double cmpl_diff = n->read_completed + n->write_completed - o.read_completed - o.write_completed;
+			double tput = cmpl_diff * SC_CLK_TCK / itv / 10.0;
+			n->util = S_VALUE(o.total_time, n->total_time, itv) / 10.0;
+			n->average_service_time = tput ? n->util / tput : 0.0;
+			n->average_request_size = cmpl_diff ? (n->read_sectors - o.read_sectors
+					+ n->write_sectors - o.write_sectors) / cmpl_diff : 0.0;
+			n->average_queue_length = S_VALUE(o.weighted_time, n->weighted_time, itv) / 1000.0;
+			n->await = cmpl_diff ? (n->read_time - o.read_time + n->write_time - o.write_time) / cmpl_diff : 0.0;
+			cmpl_diff = n->read_completed - o.read_completed;
+			n->read_await = cmpl_diff ? (n->read_time - o.read_time) / cmpl_diff : 0.0;
+			cmpl_diff = n->write_completed - o.write_completed;
+			n->write_await = cmpl_diff ? (n->write_time - o.write_time) / cmpl_diff : 0.0;
+			n->read_merges_diff = S_VALUE(o.read_merges, n->read_merges, itv);
+			n->write_merges_diff = S_VALUE(o.write_merges, n->write_merges, itv);
+		}
+		n->read_completed_diff = S_VALUE(o.read_completed, n->read_completed, itv);
+		n->write_completed_diff = S_VALUE(o.write_completed, n->write_completed, itv);
+		n->read_diff = S_VALUE(o.read_sectors, n->read_sectors, itv) / 2.0;  /* to obtain diffs in kB */
+		n->write_diff = S_VALUE(o.write_sectors, n->write_sectors, itv) / 2.0;  /* to obtain diffs in kB */
+	}
 }
 
-disk_stat get_diskspace_stats(void)
+disk_stats get_disk_stats(void)
 {
-	struct timezone tz;
 	struct statvfs st;
-	disk_stat disk_stats = {0, };
+	disk_stats ret = {0, };
+	disk_stat *disk_stats = ret.values;
+	ret.size = DISK_DEVICES; // Only data + pg_wal
 
-	disk_stats.du_data = du(AT_FDCWD, DataDir, 0, &disk_stats.du_wal);
+	disk_stats[DATA].type = "data";
+	disk_stats[DATA].directory = DataDir;
+	disk_stats[DATA].device = data_dev;
+
+	disk_stats[WAL].type = "wal";
+	disk_stats[WAL].directory = wal_directory;
+	disk_stats[WAL].device = wal_dev;
+
+	disk_stats[DATA].du = du(AT_FDCWD, DataDir, 0, &disk_stats[WAL].du);
 
 	if (statvfs(DataDir, &st) == 0) {
-		disk_stats.data_size = st.f_blocks * st.f_bsize / 1024;
-		disk_stats.data_free = st.f_bavail * st.f_bsize / 1024;
+		disk_stats[DATA].size = st.f_blocks * st.f_bsize / 1024;
+		disk_stats[DATA].free = st.f_bavail * st.f_bsize / 1024;
 	}
 
 	if (data_dev == wal_dev) {
-		disk_stats.wal_size = disk_stats.data_size;
-		disk_stats.wal_free = disk_stats.data_free;
+		disk_stats[WAL].size = disk_stats[DATA].size;
+		disk_stats[WAL].free = disk_stats[DATA].free;
 	} else if (statvfs(wal_directory, &st) == 0) {
-		disk_stats.wal_size = st.f_blocks * st.f_bsize / 1024;
-		disk_stats.wal_free = st.f_bavail * st.f_bsize / 1024;
+		disk_stats[WAL].size = st.f_blocks * st.f_bsize / 1024;
+		disk_stats[WAL].free = st.f_bavail * st.f_bsize / 1024;
 	}
 
-	read_io_stats(&disk_stats);
+	read_io_stats(&ret);
 
-	gettimeofday(&disk_stats.time, &tz);
+	ret.uptime = system_stats_old.uptime;
+	
+	diff_disk_stats(&ret);
 
-	diff_disk_stats(&disk_stats);
-
-	disk_stats.data_directory = DataDir;
-	disk_stats.data_dev = data_dev;
-
-	disk_stats.wal_directory = wal_directory;
-	disk_stats.wal_dev = wal_dev;
-
-	return disk_stats_old = disk_stats;
+	return disk_stats_old = ret;
 }
 
 void disk_stats_init(void)

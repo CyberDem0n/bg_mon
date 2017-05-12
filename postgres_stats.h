@@ -7,6 +7,8 @@ typedef struct {
 	unsigned long read_diff;
 	unsigned long long write_bytes;
 	unsigned long write_diff;
+	unsigned long long cancelled_write_bytes;
+	unsigned long cancelled_write_diff;
 } proc_io;
 
 typedef struct {
@@ -24,8 +26,8 @@ typedef struct {
 	long rss; // (24)
 	unsigned long long delayacct_blkio_ticks; // (42)
 	unsigned long delayacct_blkio_ticks_diff;
-	unsigned long guest_time; // (43)
-	double guest_time_diff;
+	unsigned long gtime; // (43)
+	double gtime_diff;
 	unsigned long long uss;
 	char *cmdline;
 	bool free_cmdline;
@@ -48,7 +50,7 @@ typedef struct {
 	pg_stat *values;
 	size_t size;
 	size_t pos;
-	struct timeval time;
+	unsigned long long uptime;
 	bool recovery_in_progress;
 	int total_connections;
 	int active_connections;
