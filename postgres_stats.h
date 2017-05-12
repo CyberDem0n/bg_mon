@@ -7,6 +7,8 @@ typedef struct {
 	unsigned long read_diff;
 	unsigned long long write_bytes;
 	unsigned long write_diff;
+	unsigned long long cancelled_write_bytes;
+	unsigned long cancelled_write_diff;
 } proc_io;
 
 typedef struct {

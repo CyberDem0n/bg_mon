@@ -102,6 +102,7 @@ static proc_io read_proc_io(pid_t pid)
 	} io_tab[] = {
 		{"read_bytes", &pi.read_bytes},
 		{"write_bytes", &pi.write_bytes},
+		{"cancelled_write_bytes", &pi.cancelled_write_bytes},
 		{NULL, NULL}
 	};
 
@@ -288,6 +289,7 @@ static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, unsigned 
 	n->delayacct_blkio_ticks_diff = S_VALUE(o->delayacct_blkio_ticks, n->delayacct_blkio_ticks, itv);
 	n->io.read_diff = S_VALUE(o->io.read_bytes, n->io.read_bytes, itv) / 1024;
 	n->io.write_diff = S_VALUE(o->io.write_bytes, n->io.write_bytes, itv) / 1024;
+	n->io.cancelled_write_diff = S_VALUE(o->io.cancelled_write_bytes, n->io.cancelled_write_bytes, itv) / 1024;
 
 	n->utime_diff = SP_VALUE_100(o->utime, n->utime, itv);
 	n->stime_diff = SP_VALUE_100(o->stime, n->stime, itv);

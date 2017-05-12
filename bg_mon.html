@@ -177,8 +177,9 @@ function apply(data, ns) {
 					data[key]['total'] = 100 - data[key]['idle'];
 				else if (ns_key == 'system_stats.memory') {
 					data[key]['cache'] = data[key]['buffers'] + data[key]['cached'];
-					data[key]['used'] = data[key]['total'] - data[key]['free'] - data[key]['cache'];
-					data[key]['free'] += data[key]['cache'];
+					data[key]['used'] = data[key]['total'] - data[key]['free'];
+					if (data[key]['used'] > data[key]['cache'])
+						data[key]['used'] -= data[key]['cache'];
 				}
 				for (var n in timeSeries[cn])
 					timeSeries[cn][n].append(t, data[key][n]);

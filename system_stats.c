@@ -119,6 +119,7 @@ static meminfo read_meminfo(void)
 	meminfo mi = {0,};
 	char *dpos, buf[255];
 	const char delimiter[] = ": ";
+	unsigned long slab_reclaimable = 0;
 	struct _mem_tab {
 		const char *name;
 		unsigned long *value;
@@ -128,6 +129,7 @@ static meminfo read_meminfo(void)
 		{"Buffers", &mi.buffers},
 		{"Cached", &mi.cached},
 		{"Dirty", &mi.dirty},
+		{"SReclaimable", &slab_reclaimable},
 		{"CommitLimit", &mi.limit},
 		{"Committed_AS", &mi.as},
 		{NULL, NULL}
@@ -161,6 +163,7 @@ static meminfo read_meminfo(void)
 	}
 
 	fclose(mifd);
+	mi.cached += slab_reclaimable;
 	mi.overcommit = read_overcommit();
 	return mi;
 }
