@@ -136,7 +136,7 @@ function getValue(data, ns) {
 	else if (ns.indexOf('system_stats.load_average.') === 0)
 		return data.toFixed(2)
 	else if (ns.indexOf('io.') === 0 && (endsWith(ns, '_read') || endsWith(ns, '_write'))
-			|| ns.indexOf('.io.') > -1 && !endsWith(ns, '.io.await'))
+			|| endsWith(ns, '.io.read') || endsWith(ns, '.io.write'))
 		return humanReadableSize(data) + '/s';
 	else if (ns.indexOf('.memory.') > -1 || ns.indexOf('.space.') > -1
 			|| ns == 'disk_stats.directory.size' || ns == 'processes.uss')
@@ -146,7 +146,7 @@ function getValue(data, ns) {
 }
 
 function set_diskstats_values(data, type) {
-	var attrs = ['read', 'write', 'await'];
+	var attrs = ['read', 'write', 'await', 'reads_ps', 'writes_ps', 'util'];
 	var t = data['disk_stats'][type]['device'];
 	data['io'][type + '_dev'] = t['name'];
 	for (var i = 0; i < attrs.length; ++i)
@@ -248,12 +248,18 @@ function body_loaded() {
 				<span style="color: black">data/<b id="io.data_dev"></b>:</span>
 				<span style="color: green">Read: <b id="io.data_read"></b></span>
 				<span style="color: orange">Write: <b id="io.data_write"></b></span>
+				<span style="color: black">Reads/s: <b id="io.data_reads_ps"></b></span>
+				<span style="color: black">Writes/s: <b id="io.data_writes_ps"></b></span>
 				<span style="color: black">Await: <b id="io.data_await"></b></span>
+				<span style="color: black">%Util: <b id="io.data_util"></b></span>
 				<div id="io.wal_tmpl">
 					<span style="color: black">wal/<b id="io.wal_dev"></b>:</span>
 					<span style="color: blue">Read: <b id="io.wal_read"></b></span>
 					<span style="color: red">Write: <b id="io.wal_write"></b></span>
+					<span style="color: black">Reads/s: <b id="io.wal_reads_ps"></b></span>
+					<span style="color: black">Writes/s: <b id="io.wal_writes_ps"></b></span>
 					<span style="color: black">Await: <b id="io.wal_await"></b></span>
+					<span style="color: black">%Util: <b id="io.wal_util"></b></span>
 				</div>
 			</td>
 		</tr>
@@ -264,9 +270,12 @@ function body_loaded() {
 	<thead>
 		<tr>
 			<th>Device</th>
-			<th>Await</th>
 			<th>Read</th>
+			<th>Reads/s</th>
 			<th>Write</th>
+			<th>Write/s</th>
+			<th>Await</th>
+			<th>%Util</th>
 			<th>Total</th>
 			<th>Free</th>
 			<th>Size</th>
@@ -276,9 +285,12 @@ function body_loaded() {
 	<tbody id="disk_stats"></tbody>
 	<tr id="disk_stats_tmpl">
 		<td id="disk_stats.device.name"></td>
-		<td id="disk_stats.device.io.await"></td>
 		<td id="disk_stats.device.io.read"></td>
+		<td id="disk_stats.device.io.reads_ps"></td>
 		<td id="disk_stats.device.io.write"></td>
+		<td id="disk_stats.device.io.writes_ps"></td>
+		<td id="disk_stats.device.io.await"></td>
+		<td id="disk_stats.device.io.util"></td>
 		<td id="disk_stats.device.space.total"></td>
 		<td id="disk_stats.device.space.left"></td>
 		<td id="disk_stats.directory.size"></td>
