@@ -318,7 +318,7 @@ static void diff_disk_stats(disk_stats *new_stats)
 		if (n->extended && o.extended) {
 			double cmpl_diff = n->read_completed + n->write_completed - o.read_completed - o.write_completed;
 			double tput = cmpl_diff * SC_CLK_TCK / itv / 10.0;
-			n->util = S_VALUE(o.total_time, n->total_time, itv) / 10.0;
+			n->util = MINIMUM(S_VALUE(o.total_time, n->total_time, itv) / 10.0, 100.0);
 			n->average_service_time = tput ? n->util / tput : 0.0;
 			n->average_request_size = cmpl_diff ? (n->read_sectors - o.read_sectors
 					+ n->write_sectors - o.write_sectors) / cmpl_diff : 0.0;
