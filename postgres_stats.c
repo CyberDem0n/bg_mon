@@ -21,7 +21,59 @@ extern pid_t PostmasterPid;
 extern int MaxBackends;
 
 static unsigned long long mem_page_size;
-static StringInfoData pg_stat_activity_query;
+static SPIPlanPtr pg_stat_activity_query_plan;
+static const char * const pg_stat_activity_query = 
+"WITH activity AS ("
+"SELECT to_json(datname)::text AS datname,"
+		"a.pid as pid,"
+		"to_json(usename)::text AS usename,"
+		"client_addr,"
+		"client_port,"
+		"round(extract(epoch from (now() - xact_start)))::int as age,"
+#if PG_VERSION_NUM >= 90600
+		"wait_event IS NOT NULL as "
+#endif
+		"waiting,"
+		"to_json(CASE WHEN state = 'idle in transaction' THEN "
+				"CASE WHEN xact_start != state_change THEN "
+					"'idle in transaction ' || CAST("
+						"abs(round(extract(epoch from (now() - state_change)))) AS text) "
+					"ELSE state "
+				"END "
+			"WHEN state = 'active' THEN query "
+			"ELSE state "
+		"END)::text AS query,"
+#if PG_VERSION_NUM >= 90600
+		"ARRAY(SELECT unnest(pg_blocking_pids(a.pid)) ORDER BY 1) as locked_by "
+#else
+		"array_agg(distinct other.pid ORDER BY other.pid) as locked_by "
+#endif
+"FROM pg_stat_activity a "
+#if PG_VERSION_NUM < 90600
+"LEFT JOIN pg_locks  this ON this.pid = a.pid and this.granted = 'f' "
+"LEFT JOIN pg_locks other ON this.locktype = other.locktype "
+							"AND this.database IS NOT DISTINCT FROM other.database "
+							"AND this.relation IS NOT DISTINCT FROM other.relation "
+							"AND this.page IS NOT DISTINCT FROM other.page "
+							"AND this.tuple IS NOT DISTINCT FROM other.tuple "
+							"AND this.virtualxid IS NOT DISTINCT FROM other.virtualxid "
+							"AND this.transactionid IS NOT DISTINCT FROM other.transactionid "
+							"AND this.classid IS NOT DISTINCT FROM other.classid "
+							"AND this.objid IS NOT DISTINCT FROM other.objid "
+							"AND this.objsubid IS NOT DISTINCT FROM other.objsubid "
+							"AND this.pid != other.pid "
+							"AND other.granted = 't' "
+#endif
+"WHERE a.pid != pg_backend_pid() "
+"GROUP BY 1,2,3,4,5,6,7,8"
+"), lockers AS ("
+"SELECT DISTINCT(locked_by[1])"
+" FROM activity "
+"WHERE locked_by IS NOT NULL"
+") SELECT datname, pid, usename, client_addr, client_port, age, waiting,"
+	" NULLIF(array_to_string(locked_by, ','), ''), query, pid IN (SELECT * FROM lockers)"
+" FROM activity"
+" ORDER BY 2";
 
 typedef struct {
 	proc_stat *values;
@@ -128,23 +180,28 @@ static proc_io read_proc_io(pid_t pid)
 	return pi;
 }
 
-static proc_stat read_proc_stat(pid_t pid)
+static proc_stat read_proc_stat(pid_t pid, pid_t ppid)
 {
+	char *t, *endptr, buf[512];
 	proc_stat ps = {0,};
 	FILE *statfd = open_proc_file(pid, "stat");
 
 	if (statfd == NULL)
 		return ps;
 
-	ps.fields = fscanf(statfd, "%d (%*[^)]) %c %d %*d %*d %*d %*d %*u %*u %*u \
-%*u %*u %lu %lu %*d %*d %ld %*d %*d %*d %llu %lu %ld %*u %*u %*u %*u %*u %*u \
-%*u %*u %*u %*u %*u %*u %*u %*d %*d %*u %*u %llu %lu", &ps.pid, &ps.state,
-		&ps.ppid, &ps.utime, &ps.stime, &ps.priority, &ps.start_time, &ps.vsize,
-		&ps.rss, &ps.delayacct_blkio_ticks, &ps.gtime);
-
-	if (ps.fields < 9) {
-		elog(DEBUG1, "Can't parse content of /proc/%d/stat", pid);
-		ps.fields = ps.ppid = 0;
+	if (fgets(buf, sizeof(buf), statfd)) {
+		for (t = buf; *t != ')' && *t != '\0'; ++t);
+		if (*t == ')' && strtol(t + 4, &endptr, 10) == ppid) {
+			ps.fields = sscanf(t + 1, "%c %d %*d %*d %*d %*d %*u %*u %*u \
+		%*u %*u %lu %lu %*d %*d %ld %*d %*d %*d %llu %lu %ld %*u %*u %*u %*u %*u %*u \
+		%*u %*u %*u %*u %*u %*u %*u %*d %*d %*u %*u %llu %lu", &ps.state,
+				&ps.ppid, &ps.utime, &ps.stime, &ps.priority, &ps.start_time, &ps.vsize,
+				&ps.rss, &ps.delayacct_blkio_ticks, &ps.gtime);
+			if (ps.fields < 8) {
+				elog(DEBUG1, "Can't parse content of /proc/%d/stat", pid);
+				ps.fields = ps.ppid = 0;
+			} else ps.pid = pid;
+		}
 	}
 
 	fclose(statfd);
@@ -180,6 +237,7 @@ static void read_procfs(pid_t ppid, proc_stat_list *list)
 	DIR *proc;
 	struct dirent buf, *dp;
 	pid_t pid;
+	char *endptr;
 	proc_stat ps;
 
 	list->pos = 0;
@@ -193,9 +251,10 @@ static void read_procfs(pid_t ppid, proc_stat_list *list)
 
 	while (readdir_r(proc, &buf, &dp) == 0 && dp != NULL) {
 		if (dp->d_name[0] >= '1' && dp->d_name[0] <= '9'
-				&& sscanf(dp->d_name, "%d", &pid) == 1
+				&& (pid = strtol(dp->d_name, &endptr, 10)) > 0
+				&& endptr > dp->d_name && *endptr == '\0'
 				&& pid != MyProcPid) { // skip themself
-			ps = read_proc_stat(pid);
+			ps = read_proc_stat(pid, ppid);
 			if (ps.fields && ps.ppid == ppid) {
 				ps.uss = get_memory_usage(pid);
 				ps.io = read_proc_io(pid);
@@ -342,10 +401,10 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	StartTransactionCommand();
 	SPI_connect();
 	PushActiveSnapshot(GetTransactionSnapshot());
-	pgstat_report_activity(STATE_RUNNING, pg_stat_activity_query.data);
+	pgstat_report_activity(STATE_RUNNING, pg_stat_activity_query);
 
 	/* We can now execute queries via SPI */
-	ret = SPI_execute(pg_stat_activity_query.data, true, 0);
+	ret = SPI_execute_plan(pg_stat_activity_query_plan, NULL, NULL, true, 0);
 
 	if (ret != SPI_OK_SELECT)
 		elog(FATAL, "cannot select from pg_stat_activity: error code %d", ret);
@@ -416,63 +475,26 @@ pg_stat_list get_postgres_stats(void)
 
 void postgres_stats_init(void)
 {
+	SetCurrentStatementStartTimestamp();
+	StartTransactionCommand();
+	SPI_connect();
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	pg_stat_activity_query_plan = SPI_prepare(pg_stat_activity_query, 0, NULL);
+	if (pg_stat_activity_query_plan == NULL)
+		elog(FATAL, "pg_stat_activity_query: SPI_prepare returned %d", SPI_result);
+
+	if (SPI_keepplan(pg_stat_activity_query_plan))
+		elog(FATAL, "pg_stat_activity_query: SPI_keepplan failed");
+
+	SPI_finish();
+	PopActiveSnapshot();
+	CommitTransactionCommand();
+
 	mem_page_size = getpagesize() / 1024;
 	pg_stat_list_init(&pg_stats_current);
 	pg_stat_list_init(&pg_stats_new);
 
 	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.size));
 
-	initStringInfo(&pg_stat_activity_query);
-	appendStringInfo(&pg_stat_activity_query,
-					"WITH activity AS ("
-						"SELECT to_json(datname)::text AS datname,"
-								"a.pid as pid,"
-								"to_json(usename)::text AS usename,"
-								"client_addr,"
-								"client_port,"
-								"round(extract(epoch from (now() - xact_start)))::int as age,"
-#if PG_VERSION_NUM >= 90600
-								"wait_event IS NOT NULL as "
-#endif
-								"waiting,"
-								"to_json(CASE WHEN state = 'idle in transaction' THEN "
-										"CASE WHEN xact_start != state_change THEN "
-											"'idle in transaction ' || CAST("
-												"abs(round(extract(epoch from (now() - state_change)))) AS text) "
-											"ELSE state "
-										"END "
-									"WHEN state = 'active' THEN query "
-									"ELSE state "
-								"END)::text AS query,"
-#if PG_VERSION_NUM >= 90600
-								"ARRAY(SELECT unnest(pg_blocking_pids(a.pid)) ORDER BY 1) as locked_by "
-#else
-								"array_agg(distinct other.pid ORDER BY other.pid) as locked_by "
-#endif
-						"FROM pg_stat_activity a "
-#if PG_VERSION_NUM < 90600
-						"LEFT JOIN pg_locks  this ON this.pid = a.pid and this.granted = 'f' "
-						"LEFT JOIN pg_locks other ON this.locktype = other.locktype "
-													"AND this.database IS NOT DISTINCT FROM other.database "
-													"AND this.relation IS NOT DISTINCT FROM other.relation "
-													"AND this.page IS NOT DISTINCT FROM other.page "
-													"AND this.tuple IS NOT DISTINCT FROM other.tuple "
-													"AND this.virtualxid IS NOT DISTINCT FROM other.virtualxid "
-													"AND this.transactionid IS NOT DISTINCT FROM other.transactionid "
-													"AND this.classid IS NOT DISTINCT FROM other.classid "
-													"AND this.objid IS NOT DISTINCT FROM other.objid "
-													"AND this.objsubid IS NOT DISTINCT FROM other.objsubid "
-													"AND this.pid != other.pid "
-													"AND other.granted = 't' "
-#endif
-						"WHERE a.pid != pg_backend_pid() "
-						"GROUP BY 1,2,3,4,5,6,7,8"
-					"), lockers AS ("
-						"SELECT DISTINCT(locked_by[1])"
-						" FROM activity "
-						"WHERE locked_by IS NOT NULL"
-					") SELECT datname, pid, usename, client_addr, client_port, age, waiting,"
-							" NULLIF(array_to_string(locked_by, ','), ''), query, pid IN (SELECT * FROM lockers)"
-					" FROM activity"
-					" ORDER BY 2");
 }
