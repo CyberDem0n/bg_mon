@@ -33,7 +33,7 @@ pg_time_t pg_start_time;
 extern int MaxConnections;
 extern char *DataDir;
 
-pthread_mutex_t lock;
+static pthread_mutex_t lock;
 
 /* flags set by signal handlers */
 static volatile sig_atomic_t got_sighup = false;
@@ -94,7 +94,7 @@ initialize_bg_mon()
 	system_stats_init();
 }
 
-static void prepares_statistics_output(struct evbuffer *evb)
+static void prepare_statistics_output(struct evbuffer *evb)
 {
 	bool is_first = true;
 	size_t i;
@@ -203,7 +203,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	struct evbuffer *evb = evbuffer_new();
 
 	if (strncmp(uri, "/ui", 3)) {
-		prepares_statistics_output(evb);
+		prepare_statistics_output(evb);
 		evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "application/json");
 	} else {
 		int fd = open(UIFILE, O_RDONLY);

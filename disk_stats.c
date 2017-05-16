@@ -4,6 +4,7 @@
 #include <sys/statvfs.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "postgres.h"
 
@@ -33,6 +34,11 @@ static char *data_dev;
 static char *wal_dev;
 
 static disk_stats disk_stats_old = {0,};
+static pthread_mutex_t du_lock;
+static pthread_cond_t du_cond;
+static bool run_du;
+static unsigned long long data_du, wal_du;
+static unsigned int du_counter;
 
 char *memory_cgroup_mount = NULL;
 
@@ -84,6 +90,23 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 
 	closedir(dir); // will close dirfd as well
 	return ret;
+}
+
+static void *du_thread(void *arg)
+{
+	unsigned long long tmp_data_du, tmp_wal_du;
+	while (true) {
+		tmp_data_du = du(AT_FDCWD, DataDir, 0, &tmp_wal_du);
+		pthread_mutex_lock(&du_lock);
+		data_du = tmp_data_du;
+		wal_du = tmp_wal_du;
+		while (!run_du)
+			pthread_cond_wait(&du_cond, &du_lock);
+		run_du = false;
+		pthread_mutex_unlock(&du_lock);
+	}
+
+	return (void *)0;
 }
 
 static bool is_dummy(struct mntent *me)
@@ -353,7 +376,15 @@ disk_stats get_disk_stats(void)
 	disk_stats[WAL].directory = wal_directory;
 	disk_stats[WAL].device = wal_dev;
 
-	disk_stats[DATA].du = du(AT_FDCWD, DataDir, 0, &disk_stats[WAL].du);
+	pthread_mutex_lock(&du_lock);
+	disk_stats[DATA].du = data_du;
+	disk_stats[WAL].du = wal_du;
+	if ((du_counter = (du_counter + 1) % 30) == 0)
+		run_du = true;
+	pthread_mutex_unlock(&du_lock);
+
+	if (du_counter == 0)
+		pthread_cond_signal(&du_cond);
 
 	if (statvfs(DataDir, &st) == 0) {
 		disk_stats[DATA].size = st.f_blocks * st.f_bsize / 1024;
@@ -379,6 +410,7 @@ disk_stats get_disk_stats(void)
 
 void disk_stats_init(void)
 {
+	pthread_t thread;
 	List *mounts = read_mounts();
 	size_t len = strlen(DataDir);
 	wal_directory = palloc(len + sizeof(pg_wal) + 2);
@@ -397,4 +429,10 @@ void disk_stats_init(void)
 	}
 
 	free_mounts(mounts);
+
+	run_du = false;
+	du_counter = 0;
+	pthread_mutex_init(&du_lock, NULL);
+	pthread_cond_init(&du_cond, NULL);
+	pthread_create(&thread, NULL, du_thread, NULL);
 }
