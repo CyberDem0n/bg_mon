@@ -1,6 +1,8 @@
 #ifndef _SYSTEM_STATS_H_
 #define _SYSTEM_STATS_H_
 
+#include "postgres.h"
+
 double SC_CLK_TCK;
 
 #define MINIMUM(a,b)		((a) < (b) ? (a) : (b))
@@ -8,8 +10,6 @@ double SC_CLK_TCK;
 #define S_VALUE(m,n,p)		(((double) ((n) - (m))) / (p) * SC_CLK_TCK)
 #define SP_VALUE(m,n,p)		(n < m ? 0 : ((double) ((n) - (m))) / (p) * 100)
 #define SP_VALUE_100(m,n,p)	MINIMUM((((double) ((n) - (m))) / (p) * 100), 100.0)
-
-typedef char bool;
 
 typedef struct {
 	float run_1min;

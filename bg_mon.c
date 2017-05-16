@@ -48,10 +48,6 @@ static pg_stat_list pg_stats_current;
 static disk_stats diskspace_stats_current;
 static system_stat system_stats_current;
 
-static void report_stats()
-{
-}
-
 /*
  * Signal handler for SIGTERM
  *		Set a flag to let the main loop to terminate, and set our latch to wake
@@ -350,8 +346,6 @@ restart:
 
 			pthread_mutex_unlock(&lock);
 		}
-
-		report_stats();
 	}
 
 	proc_exit(1);
