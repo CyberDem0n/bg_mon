@@ -376,10 +376,11 @@ disk_stats get_disk_stats(void)
 	disk_stats[WAL].directory = wal_directory;
 	disk_stats[WAL].device = wal_dev;
 
+	du_counter = (du_counter + 1) % 30;
 	pthread_mutex_lock(&du_lock);
 	disk_stats[DATA].du = data_du;
 	disk_stats[WAL].du = wal_du;
-	if ((du_counter = (du_counter + 1) % 30) == 0)
+	if (du_counter == 0)
 		run_du = true;
 	pthread_mutex_unlock(&du_lock);
 
@@ -432,6 +433,8 @@ void disk_stats_init(void)
 
 	run_du = false;
 	du_counter = 0;
+	data_du = 0;
+	wal_du = 0;
 	pthread_mutex_init(&du_lock, NULL);
 	pthread_cond_init(&du_cond, NULL);
 	pthread_create(&thread, NULL, du_thread, NULL);
