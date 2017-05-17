@@ -20,6 +20,8 @@ extern system_stat system_stats_old;
 extern pid_t PostmasterPid;
 extern int MaxBackends;
 
+static size_t postmaster_pid_len;
+static char postmaster_pid[32];
 static unsigned long long mem_page_size;
 static SPIPlanPtr pg_stat_activity_query_plan;
 static const char * const pg_stat_activity_query = 
@@ -72,8 +74,7 @@ static const char * const pg_stat_activity_query =
 "WHERE locked_by IS NOT NULL"
 ") SELECT datname, pid, usename, client_addr, client_port, age, waiting,"
 	" NULLIF(array_to_string(locked_by, ','), ''), query, pid IN (SELECT * FROM lockers)"
-" FROM activity"
-" ORDER BY 2";
+" FROM activity";
 
 typedef struct {
 	proc_stat *values;
@@ -124,54 +125,53 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 	return true;
 }
 
-static FILE *open_proc_file(pid_t pid, const char *type)
+static unsigned long long get_memory_usage(const char *proc_file)
 {
-	char proc_file[32];
-	sprintf(proc_file, "/proc/%d/%s", pid, type);
-	return fopen(proc_file, "r");
-}
-
-static unsigned long long get_memory_usage(pid_t pid)
-{
-	int resident, share;
-	FILE *fd = open_proc_file(pid, "statm");
+	char *p, *endptr, buf[255];
+	unsigned long resident = 0, share = 0;
+	FILE *fd = fopen(proc_file, "r");
 	if (fd == NULL) return 0;
-	if (fscanf(fd, "%*d %d %d", &resident, &share) != 2)
-		resident = share = 0;
+	if (fgets(buf, sizeof(buf), fd)) {
+		for (p = buf; *p != ' ' && *p != '\0'; ++p);
+		if (*p == ' ') {
+			resident = strtoul(p + 1, &endptr, 10);
+			if (endptr > p + 1 && *endptr == ' ')
+				share = strtoul(endptr + 1, NULL, 10);
+		}
+	}
 	fclose(fd);
 	return (unsigned long long)(resident - share) * mem_page_size;
 }
 
-static proc_io read_proc_io(pid_t pid)
+static proc_io read_proc_io(const char *proc_file)
 {
 	int i = 0, j = 0;
 	proc_io pi = {0,};
-	char *dpos, buf[255];
-	const char delimiter[] = ": ";
+	char *dpos, *endptr, buf[255];
 	struct _io_tab {
 		const char *name;
+		size_t name_len;
 		unsigned long long *value;
 	} io_tab[] = {
-		{"read_bytes", &pi.read_bytes},
-		{"write_bytes", &pi.write_bytes},
-		{"cancelled_write_bytes", &pi.cancelled_write_bytes},
-		{NULL, NULL}
+		{"read_bytes: ", 12, &pi.read_bytes},
+		{"write_bytes: ", 13, &pi.write_bytes},
+		{"cancelled_write_bytes: ", 23, &pi.cancelled_write_bytes},
+		{NULL, 0, NULL}
 	};
 
-	FILE *iofd = open_proc_file(pid, "io");
+	FILE *iofd = fopen(proc_file, "r");
 
 	if (iofd == NULL)
 		return pi;
 
 	while (fgets(buf, sizeof(buf), iofd) && i < sizeof(io_tab)/sizeof(struct _io_tab) - 1) {
-		if ((dpos = strstr(buf, delimiter)) == NULL)
-			continue;
-
 		for (j = 0; io_tab[j].name != NULL; ++j)
-			if (strncmp(io_tab[j].name, buf, dpos - buf) == 0) {
+			if (strncmp(io_tab[j].name, buf, io_tab[j].name_len) == 0) {
 				++i;
-				if (sscanf(dpos + sizeof(delimiter) - 1, "%llu", io_tab[j].value) == 1)
-					pi.available = true;
+				dpos = buf + io_tab[j].name_len;
+				*io_tab[j].value = strtoull(dpos, &endptr, 10);
+				if (endptr > dpos)
+				pi.available = true;
 				break;
 			}
 	}
@@ -180,27 +180,27 @@ static proc_io read_proc_io(pid_t pid)
 	return pi;
 }
 
-static proc_stat read_proc_stat(pid_t pid, pid_t ppid)
+static proc_stat read_proc_stat(const char *proc_file)
 {
-	char *t, *endptr, buf[512];
+	char *t, buf[512];
 	proc_stat ps = {0,};
-	FILE *statfd = open_proc_file(pid, "stat");
+	FILE *statfd = fopen(proc_file, "r");
 
 	if (statfd == NULL)
 		return ps;
 
 	if (fgets(buf, sizeof(buf), statfd)) {
 		for (t = buf; *t != ')' && *t != '\0'; ++t);
-		if (*t == ')' && strtol(t + 4, &endptr, 10) == ppid) {
+		if (*t == ')' && strncmp(t + 3, postmaster_pid, postmaster_pid_len) == 0) {
 			ps.fields = sscanf(t + 2, "%c %d %*d %*d %*d %*d %*u %*u %*u \
 		%*u %*u %lu %lu %*d %*d %ld %*d %*d %*d %llu %lu %ld %*u %*u %*u %*u %*u %*u \
 		%*u %*u %*u %*u %*u %*u %*u %*d %*d %*u %*u %llu %lu", &ps.state,
 				&ps.ppid, &ps.utime, &ps.stime, &ps.priority, &ps.start_time, &ps.vsize,
 				&ps.rss, &ps.delayacct_blkio_ticks, &ps.gtime);
 			if (ps.fields < 8) {
-				elog(DEBUG1, "Can't parse content of /proc/%d/stat", pid);
+				elog(DEBUG1, "Can't parse content of %s", proc_file);
 				ps.fields = ps.ppid = 0;
-			} else ps.pid = pid;
+			}
 		}
 	}
 
@@ -232,32 +232,42 @@ static int pg_stat_cmp(const void *el1, const void *el2)
 	return ((const pg_stat *) el1)->pid - ((const pg_stat *) el2)->pid;
 }
 
-static void read_procfs(pid_t ppid, proc_stat_list *list)
+static void read_procfs(proc_stat_list *list)
 {
 	DIR *proc;
 	struct dirent buf, *dp;
 	pid_t pid;
 	char *endptr;
+	char proc_file[32] = "/proc";
 	proc_stat ps;
 
 	list->pos = 0;
 
 	pgstat_report_activity(STATE_RUNNING, "collecting statistics from procfs");
 
-	if ((proc = opendir("/proc")) == NULL) {
+	if ((proc = opendir(proc_file)) == NULL) {
 		elog(ERROR, "couldn't open '/proc'");
 		return;
 	}
 
 	while (readdir_r(proc, &buf, &dp) == 0 && dp != NULL) {
 		if (dp->d_name[0] >= '1' && dp->d_name[0] <= '9'
-				&& (pid = strtol(dp->d_name, &endptr, 10)) > 0
+				&& (pid = strtoul(dp->d_name, &endptr, 10)) > 0
 				&& endptr > dp->d_name && *endptr == '\0'
 				&& pid != MyProcPid) { // skip themself
-			ps = read_proc_stat(pid, ppid);
-			if (ps.fields && ps.ppid == ppid) {
-				ps.uss = get_memory_usage(pid);
-				ps.io = read_proc_io(pid);
+					size_t pid_len = endptr - dp->d_name;
+					proc_file[5] = '/';
+					memcpy(proc_file + 6, dp->d_name, pid_len);
+					proc_file[pid_len + 6] = '/';
+					strcpy(proc_file + pid_len + 7, "stat");
+			ps = read_proc_stat(proc_file);
+			if (ps.fields && ps.ppid == PostmasterPid) {
+				ps.pid = pid;
+				proc_file[pid_len + 11] = 'm'; // statm
+				proc_file[pid_len + 12] = '\0';
+				ps.uss = get_memory_usage(proc_file);
+				strcpy(proc_file + pid_len + 7, "io");
+				ps.io = read_proc_io(proc_file);
 				proc_stats_add(list, ps);
 			}
 		}
@@ -302,9 +312,12 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 
 static void read_proc_cmdline(pg_stat *stat)
 {
+	FILE *f;
 	char buf[MAXPGPATH];
-	FILE *f = open_proc_file(stat->pid, "cmdline");
-	if (f == NULL) return;
+	char proc_file[32];
+	sprintf(proc_file, "/proc/%d/cmdline", stat->pid);
+
+	if ((f = fopen(proc_file, "r")) == NULL) return;
 
 	if (fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
 		char *p, *lp = NULL;
@@ -450,13 +463,16 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	PopActiveSnapshot();
 	CommitTransactionCommand();
 	pg_stats->uptime = system_stats_old.uptime;
+
+	if (pg_stats->pos > 0)
+		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
 pg_stat_list get_postgres_stats(void)
 {
 	pg_stat_list pg_stats_tmp;
 
-	read_procfs(PostmasterPid, &proc_stats);
+	read_procfs(&proc_stats);
 
 	pg_stat_list_free_resources(&pg_stats_new);
 	get_pg_stat_activity(&pg_stats_new);
@@ -496,5 +512,6 @@ void postgres_stats_init(void)
 	pg_stat_list_init(&pg_stats_new);
 
 	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.size));
-
+	sprintf(postmaster_pid, " %d ", PostmasterPid);
+	postmaster_pid_len = strlen(postmaster_pid);
 }
