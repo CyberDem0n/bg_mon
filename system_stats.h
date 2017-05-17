@@ -65,12 +65,12 @@ typedef struct {
 } cpu_stat;
 
 typedef struct {
+	unsigned long long uptime;
 	unsigned long long ctxt;
 	unsigned long ctxt_diff;
 	unsigned long procs_running;
 	unsigned long procs_blocked;
 	cpu_stat cpu;
-	int uptime;
 	load_avg load_avg;
 	meminfo mem;
 	char *sysname;
