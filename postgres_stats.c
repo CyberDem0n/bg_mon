@@ -192,7 +192,7 @@ static proc_stat read_proc_stat(pid_t pid, pid_t ppid)
 	if (fgets(buf, sizeof(buf), statfd)) {
 		for (t = buf; *t != ')' && *t != '\0'; ++t);
 		if (*t == ')' && strtol(t + 4, &endptr, 10) == ppid) {
-			ps.fields = sscanf(t + 1, "%c %d %*d %*d %*d %*d %*u %*u %*u \
+			ps.fields = sscanf(t + 2, "%c %d %*d %*d %*d %*d %*u %*u %*u \
 		%*u %*u %lu %lu %*d %*d %ld %*d %*d %*d %llu %lu %ld %*u %*u %*u %*u %*u %*u \
 		%*u %*u %*u %*u %*u %*u %*u %*d %*d %*u %*u %llu %lu", &ps.state,
 				&ps.ppid, &ps.utime, &ps.stime, &ps.priority, &ps.start_time, &ps.vsize,
