@@ -141,20 +141,23 @@ static List *read_mounts()
 {
 	List *mounts = NIL;
 	struct mntent *me;
-	FILE *f = setmntent(MOUNTED, "r");
+	FILE *f;
 
-	while ((me = getmntent(f)) != NULL) {
-		mount_entry *m = palloc(sizeof(mount_entry));
-		m->me_devname = pstrdup(me->mnt_fsname);
-		m->me_mountdir = pstrdup(me->mnt_dir);
-		m->me_dev = -1;
-		m->me_dummy = is_dummy(me);
-		m->me_remote = is_remote(me);
-		mounts = lappend(mounts, m);
-		if (memory_cgroup_mount == NULL
-				&& strcmp(me->mnt_type, "cgroup") == 0
-				&& hasmntopt(me, "memory"))
-			memory_cgroup_mount = pstrdup(me->mnt_dir);
+	if ((f = setmntent(MOUNTED, "r")) != NULL) {
+		while ((me = getmntent(f)) != NULL) {
+			mount_entry *m = palloc(sizeof(mount_entry));
+			m->me_devname = pstrdup(me->mnt_fsname);
+			m->me_mountdir = pstrdup(me->mnt_dir);
+			m->me_dev = -1;
+			m->me_dummy = is_dummy(me);
+			m->me_remote = is_remote(me);
+			mounts = lappend(mounts, m);
+			if (memory_cgroup_mount == NULL
+					&& strcmp(me->mnt_type, "cgroup") == 0
+					&& hasmntopt(me, "memory"))
+				memory_cgroup_mount = pstrdup(me->mnt_dir);
+		}
+		fclose(f);
 	}
 	return mounts;
 }

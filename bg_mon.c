@@ -160,10 +160,10 @@ static void prepare_statistics_output(struct evbuffer *evb)
 
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
-		if (!s.is_backend || s.query != NULL) {
+		if ((!s.is_backend && s.ps.cmdline != NULL) || s.query != NULL) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
-			char *type = s.is_backend ? "backend" : ps.cmdline == NULL ? "unknown" : ps.cmdline;
+			char *type = s.is_backend ? "backend" : ps.cmdline;
 			if (is_first) is_first = false;
 			else evbuffer_add_printf(evb, ", ");
 			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": \"%s\", \"state\": \"%c\", ", s.pid, type, ps.state);
