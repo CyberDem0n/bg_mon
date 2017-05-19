@@ -60,7 +60,7 @@ bg_mon_sigterm(SIGNAL_ARGS)
 
 	got_sigterm = true;
 #if PG_VERSION_NUM >= 100000
-        SetLatch(MyLatch);
+	SetLatch(MyLatch);
 #else
 	if (MyProc)
 		SetLatch(&MyProc->procLatch);
@@ -80,7 +80,7 @@ bg_mon_sighup(SIGNAL_ARGS)
 
 	got_sighup = true;
 #if PG_VERSION_NUM >= 100000
-        SetLatch(MyLatch);
+	SetLatch(MyLatch);
 #else
 	if (MyProc)
 		SetLatch(&MyProc->procLatch);
@@ -315,7 +315,7 @@ restart:
 			int rc = WaitLatch(MyLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 						   naptime,
-                                                   PG_WAIT_EXTENSION);
+						   PG_WAIT_EXTENSION);
 
 			ResetLatch(MyLatch);
 #else
@@ -416,14 +416,14 @@ _PG_init(void)
 		return;
 
 	/* set up common data for all our workers */
-        memset(&worker, 0, sizeof(worker));
+	memset(&worker, 0, sizeof(worker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = 1;
 #if PG_VERSION_NUM >= 100000
-        sprintf(worker.bgw_library_name, "bg_mon");
-        sprintf(worker.bgw_function_name, "bg_mon_main");
+	sprintf(worker.bgw_library_name, "bg_mon");
+	sprintf(worker.bgw_function_name, "bg_mon_main");
 #else
 	worker.bgw_main = bg_mon_main;
 #endif
