@@ -59,9 +59,12 @@ bg_mon_sigterm(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	got_sigterm = true;
+#if PG_VERSION_NUM >= 100000
+	SetLatch(MyLatch);
+#else
 	if (MyProc)
 		SetLatch(&MyProc->procLatch);
-
+#endif
 	errno = save_errno;
 }
 
@@ -76,9 +79,12 @@ bg_mon_sighup(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	got_sighup = true;
+#if PG_VERSION_NUM >= 100000
+	SetLatch(MyLatch);
+#else
 	if (MyProc)
 		SetLatch(&MyProc->procLatch);
-
+#endif
 	errno = save_errno;
 }
 
@@ -305,12 +311,20 @@ restart:
 		if (naptime <= 0) { // something is very slow
 			next_run = current_time; // reschedule next run
 		} else {
+#if PG_VERSION_NUM >= 100000
+			int rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+						   naptime,
+						   PG_WAIT_EXTENSION);
+
+			ResetLatch(MyLatch);
+#else
 			int rc = WaitLatch(&MyProc->procLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 						   naptime);
 
 			ResetLatch(&MyProc->procLatch);
-
+#endif
 			/* emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 				proc_exit(1);
@@ -402,11 +416,17 @@ _PG_init(void)
 		return;
 
 	/* set up common data for all our workers */
+	memset(&worker, 0, sizeof(worker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = 1;
+#if PG_VERSION_NUM >= 100000
+	sprintf(worker.bgw_library_name, "bg_mon");
+	sprintf(worker.bgw_function_name, "bg_mon_main");
+#else
 	worker.bgw_main = bg_mon_main;
+#endif
 #if PG_VERSION_NUM >= 90400
 	worker.bgw_notify_pid = 0;
 #endif

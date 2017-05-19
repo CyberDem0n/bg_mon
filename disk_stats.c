@@ -27,7 +27,11 @@ typedef struct {
 	bool me_remote;
 } mount_entry;
 
+#if PG_VERSION_NUM >= 100000
+static const char pg_wal[] = "pg_wal";
+#else
 static const char pg_wal[] = "pg_xlog";
+#endif
 extern char *DataDir;
 static char *wal_directory;
 static char *data_dev;
