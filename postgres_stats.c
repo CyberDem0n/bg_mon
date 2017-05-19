@@ -67,6 +67,7 @@ static const char * const pg_stat_activity_query =
 							"AND other.granted = 't' "
 #endif
 "WHERE a.pid != pg_backend_pid() "
+  "AND datname IS NOT NULL "
 "GROUP BY 1,2,3,4,5,6,7,8"
 "), lockers AS ("
 "SELECT DISTINCT(locked_by[1])"
