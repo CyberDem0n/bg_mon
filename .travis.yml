@@ -17,6 +17,7 @@ script:
   - 'psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &'
   - sleep 1
   - curl http://localhost:8080
+  - sleep 30
   - pg_ctl -w -D test_cluster stop
 after_success:
   - coveralls --gcov-options '\-lr'
