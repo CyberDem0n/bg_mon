@@ -7,6 +7,7 @@ addons:
 before_install:
   - pip install cpp-coveralls
 script:
+  - echo $PATH
   - sudo make USE_PGXS=1 ENABLE_GCOV=1 install
   - inidb test_cluster
   - pg_ctl -w -D test_cluster start -o "--shared_preload_libraries=bg_mon --port=5440 --unix_socket_directories=."
