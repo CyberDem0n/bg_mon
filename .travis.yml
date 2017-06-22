@@ -1,0 +1,18 @@
+sudo: true
+dist: trusty
+language: c
+compiler: gcc
+addons:
+  postgresql: "9.6"
+before_install:
+  - pip install cpp-coveralls
+script:
+  - sudo make USE_PGXS=1 ENABLE_GCOV=1 install
+  - inidb test_cluster
+  - pg_ctl -w -D test_cluster start -o "--shared_preload_libraries=bg_mon --port=5440 --unix_socket_directories=."
+  - 'psql -h localhost -p 5440 -d postgres -c "select pg_sleep(3)" &'
+  - sleep 1
+  - curl http://localhost:8080
+  - pg_ctl -w -D test_cluster stop
+after_success:
+  - coveralls --gcov-options '\-lr'

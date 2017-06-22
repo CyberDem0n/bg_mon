@@ -126,6 +126,146 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 	return true;
 }
 
+
+static size_t json_escaped_size(const char *s)
+{
+	size_t ret = 0;
+	while (true) {
+		switch (*s) {
+			case 0x00:
+				return ret;
+			case '"':
+			case '\\':
+			case '\b':
+			case '\f':
+			case '\n':
+			case '\r':
+			case '\t':
+				ret += 1; /* from 1 byte to \x 2 bytes */
+				break;
+			case 0x01:
+			case 0x02:
+			case 0x03:
+			case 0x04:
+			case 0x05:
+			case 0x06:
+			case 0x07:
+			case 0x0b:
+			case 0x0e:
+			case 0x0f:
+			case 0x10:
+			case 0x11:
+			case 0x12:
+			case 0x13:
+			case 0x14:
+			case 0x15:
+			case 0x16:
+			case 0x17:
+			case 0x18:
+			case 0x19:
+			case 0x1a:
+			case 0x1b:
+			case 0x1c:
+			case 0x1d:
+			case 0x1e:
+			case 0x1f:
+				ret += 5; /* from 1 byte to \uxxxx 6 bytes */
+				break;
+		}
+		++s;
+		++ret;
+	}
+}
+
+static char *json_escape_string(const char *s)
+{
+	char *ret = palloc(json_escaped_size(s) + 1);
+	char *r = ret;
+
+	while (true) {
+		switch (*s) {
+			case 0x00:
+				*r = '\0';
+				return ret;
+			case '"':
+				*(r++) = '\\';
+				*r = '"';
+				break;
+			case '\\':
+				*(r++) = '\\';
+				*r = '\\';
+				break;
+			case '\b':
+				*(r++) = '\\';
+				*r = 'b';
+				break;
+			case '\f':
+				*(r++) = '\\';
+				*r = 'f';
+				break;
+			case '\n':
+				*(r++) = '\\';
+				*r = 'n';
+				break;
+			case '\r':
+				*(r++) = '\\';
+				*r = 'r';
+				break;
+			case '\t':
+				*(r++) = '\\';
+				*r = 't';
+				break;
+			case 0x01:
+			case 0x02:
+			case 0x03:
+			case 0x04:
+			case 0x05:
+			case 0x06:
+			case 0x07:
+			case 0x0b:
+			case 0x0e:
+			case 0x0f:
+			case 0x10:
+			case 0x11:
+			case 0x12:
+			case 0x13:
+			case 0x14:
+			case 0x15:
+			case 0x16:
+			case 0x17:
+			case 0x18:
+			case 0x19:
+			case 0x1a:
+			case 0x1b:
+			case 0x1c:
+			case 0x1d:
+			case 0x1e:
+			case 0x1f:
+			{
+				// convert a number 0..15 to its hex representation (0..f)
+				static const char hexify[16] = {
+					'0', '1', '2', '3', '4', '5', '6', '7',
+					'8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
+				};
+
+				// print character c as \uxxxx
+				*(r++) = '\\';
+				*(r++) = 'u';
+				*(r++) = '0';
+				*(r++) = '0';
+				*(r++) = hexify[*s >> 4];
+				*r = hexify[*s & 0x0f];
+				break;
+			}
+			default:
+				*r = *s;
+				break;
+		}
+		++r;
+		++s;
+	}
+}
+
 static unsigned long long get_memory_usage(const char *proc_file)
 {
 	char *p, *endptr, buf[255];
@@ -328,7 +468,7 @@ static void read_proc_cmdline(pg_stat *stat)
 
 		if (lp != NULL) {
 			for (p = lp + 9; *p == ' '; p++);
-			if (*p) stat->query = pstrdup(p);
+			if (*p) stat->query = json_escape_string(p);
 		}
 
 		if (stat->ps.cmdline == NULL) {
@@ -340,13 +480,13 @@ static void read_proc_cmdline(pg_stat *stat)
 				else {
 					for (p = lp + 11; *p != '\0'; ++p);
 					while (*(--p) == ' ') *p = '\0'; // trim whitespaces
-					stat->ps.cmdline = pstrdup(lp + 1);
+					stat->ps.cmdline = json_escape_string(lp + 1);
 				}
 			} else {
 				*lp = '\0';
 				// cmdline starts after last colon followed by whitespace
 				for (p = lp - 1; *p != ':'; --p);
-				stat->ps.cmdline = pstrdup(p + 2);
+				stat->ps.cmdline = json_escape_string(p + 2);
 			}
 		}
 	}
