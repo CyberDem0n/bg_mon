@@ -5,11 +5,12 @@ compiler: gcc
 addons:
   postgresql: "9.6"
 before_install:
+  - sudo apt-get update
+  - sudo apt-get install postgresql-server-dev-9.6
   - pip install cpp-coveralls
 script:
-  - echo $PATH
   - sudo make USE_PGXS=1 ENABLE_GCOV=1 install
-  - inidb test_cluster
+  - initdb test_cluster
   - pg_ctl -w -D test_cluster start -o "--shared_preload_libraries=bg_mon --port=5440 --unix_socket_directories=."
   - 'psql -h localhost -p 5440 -d postgres -c "select pg_sleep(3)" &'
   - sleep 1
