@@ -6,7 +6,7 @@ addons:
   postgresql: "9.6"
 before_install:
   - sudo apt-get update
-  - sudo apt-get install postgresql-server-dev-9.6
+  - sudo apt-get install postgresql-server-dev-9.6 libevent-dev
   - pip install cpp-coveralls
 script:
   - sudo make USE_PGXS=1 ENABLE_GCOV=1 install
