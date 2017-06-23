@@ -150,6 +150,7 @@ static List *read_mounts()
 	if ((f = setmntent(MOUNTED, "r")) != NULL) {
 		while ((me = getmntent(f)) != NULL) {
 			mount_entry *m = palloc(sizeof(mount_entry));
+                        fprintf(stderr, "%s %s %s %s\n", me->mnt_fsname, me->mnt_dir, me->mnt_type, me->mnt_opts);
 			m->me_devname = pstrdup(me->mnt_fsname);
 			m->me_mountdir = pstrdup(me->mnt_dir);
 			m->me_dev = -1;

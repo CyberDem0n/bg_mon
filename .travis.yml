@@ -7,7 +7,7 @@ addons:
 before_install:
   - df -h
   - mount
-  - find /sys
+  - find /sys/fs/cgroup/memory
   - sudo apt-get update
   - sudo apt-get install postgresql-server-dev-9.6 libevent-dev
   - pip install cpp-coveralls
