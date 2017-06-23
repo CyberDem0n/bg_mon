@@ -23,11 +23,11 @@ script:
     psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(30)" &
     sleep 1
     psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
-    pg_basebackup -D test_cluster_backup -c fast -h localhost -p 5440 -r 2M &
+    ( time pg_basebackup -D test_cluster_backup -c fast -h localhost -p 5440 -r 2M )&
     sleep 1
     pg_ctl -D test_cluster reload
     curl http://localhost:8080/ui > /dev/null
-    curl http://localhost:8080
+    ( for a in {1..10}; do curl http://localhost:8080 && echo && sleep 1; done )&
     wait
     pg_ctl -w -D test_cluster stop
     set +e
