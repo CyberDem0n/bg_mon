@@ -147,7 +147,8 @@ static List *read_mounts()
 	struct mntent *me;
 	FILE *f;
 
-	if ((f = setmntent(MOUNTED, "r")) != NULL) {
+	/* try "/proc/mounts" first and if it failed go with defaults */
+	if ((f = setmntent("/proc/mounts", "r")) != NULL || (f = setmntent(MOUNTED, "r")) != NULL) {
 		while ((me = getmntent(f)) != NULL) {
 			mount_entry *m = palloc(sizeof(mount_entry));
 			m->me_devname = pstrdup(me->mnt_fsname);
