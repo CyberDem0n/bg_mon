@@ -1,7 +1,8 @@
+[![Build Status](https://travis-ci.org/CyberDem0n/bg_mon.svg?branch=master)](https://travis-ci.org/CyberDem0n/bg_mon) [![Coverage Status](https://coveralls.io/repos/github/CyberDem0n/bg_mon/badge.svg?branch=master)](https://coveralls.io/github/CyberDem0n/bg_mon?branch=master)
 Background worker for monitoring PostgreSQL
 ===========================================
 
-bg_mon is an extension compatible with PostgreSQL starting from version 9.3
+bg\_mon is a contrib module compatible with PostgreSQL starting from version 9.3
 It collects per-process statistics combined with `pg_stat_activity` for the processes that have the rows there, global system stats, per-partition information and the memory stats.
 
 Monitoring is being done from the [Background Worker Process](http://www.postgresql.org/docs/9.3/static/bgworker.html) and results are exposed by embeded webserver implemented with the help of [libevent](http://libevent.org/) library.
@@ -19,8 +20,8 @@ How to build and install:
 -------------------------
 
 1. You have to install `libevent-dev` package
-2. $ USE_PGXS=1 make
-3. $ sudo USE_PGXS=1 make install
+2. $ USE\_PGXS=1 make
+3. $ sudo USE\_PGXS=1 make install
 
 How to run it:
 --------------
