@@ -5,6 +5,9 @@ compiler: gcc
 addons:
   postgresql: "9.6"
 before_install:
+  - df -h
+  - mount
+  - find /sys
   - sudo apt-get update
   - sudo apt-get install postgresql-server-dev-9.6 libevent-dev
   - pip install cpp-coveralls
@@ -17,6 +20,7 @@ script:
   - 'psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &'
   - sleep 1
   - curl http://localhost:8080
+  - curl http://localhost:8080/ui
   - sleep 30
   - pg_ctl -w -D test_cluster stop
 after_success:
