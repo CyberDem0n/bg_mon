@@ -12,7 +12,12 @@ script:
   - sudo make USE_PGXS=1 ENABLE_GCOV=1 install
   - initdb test_cluster
   - echo "host replication all 127.0.0.1/32 trust" >> test_cluster/pg_hba.conf
-  - pg_ctl -w -D test_cluster start -o "--shared_preload_libraries=bg_mon --port=5440 --unix_socket_directories=."
+  - echo "unix_socket_directories = '.'" >> test_cluster/postgresql.conf
+  - echo "wal_level = 'replica'" >> test_cluster/postgresql.conf
+  - echo "max_wal_senders = 5" >> test_cluster/postgresql.conf
+  - echo "cluster_name = ' bgworker: test cluster'" >> test_cluster/postgresql.conf
+  - echo "shared_preload_libraries = ' bg_mon'" >> test_cluster/postgresql.conf
+  - pg_ctl -w -D test_cluster start -o "--port=5440"
   - 'psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(30)" &'
   - sleep 1
   - 'psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &'
