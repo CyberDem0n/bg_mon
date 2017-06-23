@@ -430,7 +430,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 	size_t pg_stats_size = pg_stats->pos;
 
 	/* Both list are sorted on pid so we need to traverse it only once */
-	while (pg_stats_pos < pg_stats_size) {
+	while (pg_stats_pos < pg_stats_size || proc_stats_pos < proc_stats.pos) {
 		if (proc_stats_pos >= proc_stats.pos) { /* new backends? */
 			break;
 		} else if (pg_stats_pos >= pg_stats_size || // No more entries from pg_stats_activity (special process?)
