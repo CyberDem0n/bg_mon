@@ -6,8 +6,8 @@ addons:
   postgresql: "9.6"
 before_install:
   - sudo apt-get update
-  - sudo apt-get install postgresql-server-dev-9.6 libevent-dev
-  - pip install cpp-coveralls
+  - sudo apt-get install -y postgresql-server-dev-9.6 libevent-dev
+  - sudo pip install --upgrade cpp-coveralls
 script:
   - |
     set -e
@@ -25,9 +25,10 @@ script:
     psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
     ( time pg_basebackup -D test_cluster_backup -c fast -X stream -h localhost -p 5440 -r 2M )&
     sleep 1
+    echo "bg_mon.port = 8081" >> test_cluster/postgresql.conf
     pg_ctl -D test_cluster reload
-    curl http://localhost:8080/ui > /dev/null
-    ( for a in {1..10}; do curl http://localhost:8080 && echo && sleep 1 && ps auxwwwf | grep postgres; done )&
+    curl http://localhost:8081/ui > /dev/null
+    ( for a in {1..10}; do curl http://localhost:8081 && echo && sleep 1 && ps auxwwwf | grep postgres; done )&
     wait
     pg_ctl -w -D test_cluster stop
     set +e
