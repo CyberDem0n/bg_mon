@@ -270,9 +270,8 @@ bg_mon_main(Datum main_arg)
 	evthread_use_pthreads();
 
 restart:
-	bg_mon_listen_address = repalloc(bg_mon_listen_address,
-									 strlen(bg_mon_listen_address_guc) + 1);
-	if (!bg_mon_listen_address) {
+	FREE(bg_mon_listen_address);
+	if (!(bg_mon_listen_address = palloc(strlen(bg_mon_listen_address_guc) + 1))) {
 		elog(ERROR, "Couldn't allocate memory for bg_mon_listen_address: exiting");
 		return proc_exit(1);
 	}
