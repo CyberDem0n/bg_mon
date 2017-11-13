@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <linux/limits.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>

@@ -4,6 +4,7 @@
 #include <event2/event.h>
 #include <event2/http.h>
 #include <event2/buffer.h>
+#include <event2/thread.h>
 
 #include "postgres.h"
 
@@ -40,8 +41,10 @@ static volatile sig_atomic_t got_sighup = false;
 static volatile sig_atomic_t got_sigterm = false;
 
 /* GUC variables */
-static int bg_mon_naptime = 1;
-static char *bg_mon_listen_address;
+static int bg_mon_naptime_guc = 1;
+static char *bg_mon_listen_address_guc;
+static char *bg_mon_listen_address = NULL;
+static int bg_mon_port_guc = 8080;
 static int bg_mon_port = 8080;
 
 static pg_stat_list pg_stats_current;
@@ -264,8 +267,18 @@ bg_mon_main(Datum main_arg)
 	BackgroundWorkerInitializeConnection("postgres", NULL);
 
 	initialize_bg_mon();
+	evthread_use_pthreads();
 
 restart:
+	FREE(bg_mon_listen_address);
+	if (!(bg_mon_listen_address = palloc(strlen(bg_mon_listen_address_guc) + 1))) {
+		elog(ERROR, "Couldn't allocate memory for bg_mon_listen_address: exiting");
+		return proc_exit(1);
+	}
+
+	strcpy(bg_mon_listen_address, bg_mon_listen_address_guc);
+	bg_mon_port = bg_mon_port_guc;
+
 	if (!(base = event_base_new())) {
 		elog(ERROR, "Couldn't create an event_base: exiting");
 		return proc_exit(1);
@@ -299,7 +312,7 @@ restart:
 	while (!got_sigterm) {
 		double	naptime;
 
-		next_run.tv_sec += bg_mon_naptime; /* adjust wakeup target time */
+		next_run.tv_sec += bg_mon_naptime_guc; /* adjust wakeup target time */
 
 		gettimeofday(&current_time, &tz);
 
@@ -337,14 +350,20 @@ restart:
 			got_sighup = false;
 			ProcessConfigFile(PGC_SIGHUP);
 
-			pthread_cancel(thread);
-			pthread_join(thread, NULL);
+			if (strcmp(bg_mon_listen_address_guc, bg_mon_listen_address) != 0
+					|| bg_mon_port_guc != bg_mon_port) {
+				struct timeval delay = {0, 0};
 
-			pthread_mutex_destroy(&lock);
+				event_base_loopexit(base, &delay);
+//				pthread_cancel(thread);
+				pthread_join(thread, NULL);
 
-			evhttp_free(http);
-			event_base_free(base);
-			goto restart;
+				pthread_mutex_destroy(&lock);
+
+				evhttp_free(http);
+				event_base_free(base);
+				goto restart;
+			}
 		}
 
 		{
@@ -380,7 +399,7 @@ _PG_init(void)
 	DefineCustomIntVariable("bg_mon.naptime",
 							"Duration between each run (in seconds).",
 							NULL,
-							&bg_mon_naptime,
+							&bg_mon_naptime_guc,
 							1,
 							1,
 							10,
@@ -392,7 +411,7 @@ _PG_init(void)
 	DefineCustomStringVariable("bg_mon.listen_address",
 							"The IP address for the web server to listen on.",
 							NULL,
-							&bg_mon_listen_address,
+							&bg_mon_listen_address_guc,
 							"127.0.0.1",
 							PGC_SIGHUP,
 							0,
@@ -402,7 +421,7 @@ _PG_init(void)
 	DefineCustomIntVariable("bg_mon.port",
 							"Port number to bind the web server to.",
 							NULL,
-							&bg_mon_port,
+							&bg_mon_port_guc,
 							8080,
 							0,
 							65535,
