@@ -43,7 +43,7 @@ static volatile sig_atomic_t got_sigterm = false;
 /* GUC variables */
 static int bg_mon_naptime_guc = 1;
 static char *bg_mon_listen_address_guc;
-static char bg_mon_listen_address[NAME_MAX];
+static char *bg_mon_listen_address = NULL;
 static int bg_mon_port_guc = 8080;
 static int bg_mon_port = 8080;
 
@@ -270,6 +270,13 @@ bg_mon_main(Datum main_arg)
 	evthread_use_pthreads();
 
 restart:
+	bg_mon_listen_address = repalloc(bg_mon_listen_address,
+									 strlen(bg_mon_listen_address_guc) + 1);
+	if (!bg_mon_listen_address) {
+		elog(ERROR, "Couldn't allocate memory for bg_mon_listen_address: exiting");
+		return proc_exit(1);
+	}
+
 	strcpy(bg_mon_listen_address, bg_mon_listen_address_guc);
 	bg_mon_port = bg_mon_port_guc;
 
