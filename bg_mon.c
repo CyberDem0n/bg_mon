@@ -172,10 +172,10 @@ static void prepare_statistics_output(struct evbuffer *evb)
 		if ((!s.is_backend && s.ps.cmdline != NULL) || s.query != NULL) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
-			char *type = s.is_backend ? "backend" : ps.cmdline;
+			char *type = s.is_backend ? "\"backend\"" : ps.cmdline;
 			if (is_first) is_first = false;
 			else evbuffer_add_printf(evb, ", ");
-			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": \"%s\", \"state\": \"%c\", ", s.pid, type, ps.state);
+			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, type, ps.state);
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
@@ -189,11 +189,8 @@ static void prepare_statistics_output(struct evbuffer *evb)
 				evbuffer_add_printf(evb, ", \"database\": %s", s.datname == NULL ? "null" : s.datname);
 				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 			}
-			if (s.query != NULL) {
-				evbuffer_add_printf(evb, ", \"query\": ");
-				if (s.is_backend) evbuffer_add_printf(evb, "%s", s.query);
-				else evbuffer_add_printf(evb, "\"%s\"", s.query);
-			}
+			if (s.query != NULL)
+				evbuffer_add_printf(evb, ", \"query\": %s", s.query);
 			evbuffer_add_printf(evb, "}");
 		}
 	}

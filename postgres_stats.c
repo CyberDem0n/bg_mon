@@ -24,58 +24,55 @@ static size_t postmaster_pid_len;
 static char postmaster_pid[32];
 static unsigned long long mem_page_size;
 static SPIPlanPtr pg_stat_activity_query_plan;
-static const char * const pg_stat_activity_query = 
-"WITH activity AS ("
-"SELECT to_json(datname)::text AS datname,"
-		"a.pid as pid,"
-		"to_json(usename)::text AS usename,"
-		"client_addr,"
-		"client_port,"
-		"round(extract(epoch from (now() - xact_start)))::int as age,"
+static const char * const pg_stat_activity_query =
+"WITH locked_processes AS ("
+	"SELECT this.pid as pid, "
 #if PG_VERSION_NUM >= 90600
-		"wait_event IS NOT NULL as "
-#endif
-		"waiting,"
-		"to_json(CASE WHEN state = 'idle in transaction' THEN "
-				"CASE WHEN xact_start != state_change THEN "
-					"'idle in transaction ' || CAST("
-						"abs(round(extract(epoch from (now() - state_change)))) AS text) "
-					"ELSE state "
-				"END "
-			"WHEN state = 'active' THEN query "
-			"ELSE state "
-		"END)::text AS query,"
-#if PG_VERSION_NUM >= 90600
-		"ARRAY(SELECT unnest(pg_blocking_pids(a.pid)) ORDER BY 1) as locked_by "
+			"ARRAY(SELECT unnest(pg_blocking_pids(this.pid)) ORDER BY 1) AS locked_by"
 #else
-		"array_agg(distinct other.pid ORDER BY other.pid) as locked_by "
+			"array_agg(DISTINCT other.pid ORDER BY other.pid) AS locked_by"
 #endif
-"FROM pg_stat_activity a "
+	" FROM pg_locks this"
 #if PG_VERSION_NUM < 90600
-"LEFT JOIN pg_locks  this ON this.pid = a.pid and this.granted = 'f' "
-"LEFT JOIN pg_locks other ON this.locktype = other.locktype "
-							"AND this.database IS NOT DISTINCT FROM other.database "
-							"AND this.relation IS NOT DISTINCT FROM other.relation "
-							"AND this.page IS NOT DISTINCT FROM other.page "
-							"AND this.tuple IS NOT DISTINCT FROM other.tuple "
-							"AND this.virtualxid IS NOT DISTINCT FROM other.virtualxid "
-							"AND this.transactionid IS NOT DISTINCT FROM other.transactionid "
-							"AND this.classid IS NOT DISTINCT FROM other.classid "
-							"AND this.objid IS NOT DISTINCT FROM other.objid "
-							"AND this.objsubid IS NOT DISTINCT FROM other.objsubid "
-							"AND this.pid != other.pid "
-							"AND other.granted = 't' "
+	" JOIN pg_locks other ON this.locktype = other.locktype "
+						"AND this.database IS NOT DISTINCT FROM other.database "
+						"AND this.relation IS NOT DISTINCT FROM other.relation "
+						"AND this.page IS NOT DISTINCT FROM other.page "
+						"AND this.tuple IS NOT DISTINCT FROM other.tuple "
+						"AND this.virtualxid IS NOT DISTINCT FROM other.virtualxid "
+						"AND this.transactionid IS NOT DISTINCT FROM other.transactionid "
+						"AND this.classid IS NOT DISTINCT FROM other.classid "
+						"AND this.objid IS NOT DISTINCT FROM other.objid "
+						"AND this.objsubid IS NOT DISTINCT FROM other.objsubid "
+						"AND this.pid != other.pid "
+						"AND other.granted"
 #endif
-"WHERE a.pid != pg_backend_pid() "
-  "AND datname IS NOT NULL "
-"GROUP BY 1,2,3,4,5,6,7,8"
+	" WHERE NOT this.granted"
+#if PG_VERSION_NUM < 90600
+	" GROUP BY 1"
+#endif
 "), lockers AS ("
-"SELECT DISTINCT(locked_by[1])"
-" FROM activity "
-"WHERE locked_by IS NOT NULL"
-") SELECT datname, pid, usename, client_addr, client_port, age, waiting,"
-	" NULLIF(array_to_string(locked_by, ','), ''), query, pid IN (SELECT * FROM lockers)"
-" FROM activity";
+	"SELECT DISTINCT unnest(locked_by)"
+	" FROM locked_processes"
+") SELECT pid,"
+		" datname::text,"
+		" usename::text,"
+		" round(extract(epoch from (now() - COALESCE(xact_start, CASE WHEN state = 'active'"
+																	" THEN query_start"
+																	" ELSE NULL END))))::int AS age,"
+		" NULLIF(array_to_string(locked_by, ','), ''),"
+		" CASE WHEN state = 'idle in transaction' THEN"
+				" CASE WHEN xact_start != state_change THEN"
+					" 'idle in transaction ' || CAST("
+						" abs(round(extract(epoch from (now() - state_change)))) AS text)"
+				" ELSE state END"
+		" WHEN state = 'active' THEN query"
+		" ELSE state END::text AS query,"
+		" pid IN (SELECT * FROM lockers)"
+	" FROM pg_stat_activity a"
+	" LEFT JOIN locked_processes USING (pid) "
+	"WHERE pid != pg_backend_pid()"
+	" AND datname IS NOT NULL";
 
 typedef struct {
 	proc_stat *values;
@@ -127,10 +124,10 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 }
 
 
-static size_t json_escaped_size(const char *s)
+static size_t json_escaped_size(const char *s, size_t len)
 {
 	size_t ret = 0;
-	while (true) {
+	while (len-- > 0) {
 		switch (*s) {
 			case 0x00:
 				return ret;
@@ -175,16 +172,19 @@ static size_t json_escaped_size(const char *s)
 		++s;
 		++ret;
 	}
+	return ret;
 }
 
-static char *json_escape_string(const char *s)
+static char *json_escape_string_len(const char *s, size_t len)
 {
-	char *ret = palloc(json_escaped_size(s) + 1);
+	char *ret = palloc(json_escaped_size(s, len) + 3);
 	char *r = ret;
+	*(r++) = '"';
 
-	while (true) {
+	while (len-- > 0) {
 		switch (*s) {
 			case 0x00:
+				*(r++) = '"';
 				*r = '\0';
 				return ret;
 			case '"':
@@ -264,6 +264,14 @@ static char *json_escape_string(const char *s)
 		++r;
 		++s;
 	}
+	*(r++) = '"';
+	*r = '\0';
+	return ret;
+}
+
+static char *json_escape_string(const char *s)
+{
+	return json_escape_string_len(s, -1);
 }
 
 static unsigned long long get_memory_usage(const char *proc_file)
@@ -476,7 +484,7 @@ static void read_proc_cmdline(pg_stat *stat)
 				// cluster name can contain ' bgworker: ' string, so we need to skip all but last
 				// buf - 2 + 11 points to the first space character after 'postgres:' string
 				for (p = buf - 2; (p = strstr(p + 11, " bgworker: ")) != NULL; lp = p);
-				if (lp == NULL) stat->ps.cmdline = pstrdup("unknown");
+				if (lp == NULL) stat->ps.cmdline = pstrdup("\"unknown\"");
 				else {
 					for (p = lp + 11; *p != '\0'; ++p);
 					while (*(--p) == ' ') *p = '\0'; // trim whitespaces
@@ -569,26 +577,51 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	if (SPI_processed > 0)
 	{
-		int a;
-		bool isnull, is_locker;
+		bool isnull, is_locker, is_idle;
+		int a, len;
+		Datum data;
+		text *value;
+		char *text_value;
 
 		MemoryContext oldcxt = MemoryContextSwitchTo(uppercxt);
 		for (a = 0; a < SPI_processed; a++) {
 			pg_stat ps = {0, };
 
-			ps.pid = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 2, &isnull)); 
-			is_locker = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 10, &isnull));
-			ps.query = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 9);
+			is_idle = true;
 
-			if (is_locker || (ps.query != NULL && strncmp(ps.query, "\"idle\"", 7))) {
-				ps.datname = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 1);
-				ps.usename = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 3);
-				ps.age = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 6, &isnull));
+			ps.pid = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 1, &isnull)); 
+			is_locker = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 7, &isnull));
+			data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 6, &isnull);
+
+			if (!isnull) {
+				value = PG_DETOAST_DATUM_PACKED(data);
+				text_value = VARDATA_ANY(value);
+				len = VARSIZE_ANY_EXHDR(value);
+				is_idle = len == 4 && !strncmp(text_value, "idle", 4);
+			}
+
+			if (is_locker || !is_idle) {
+				ps.query = isnull ? NULL : json_escape_string_len(text_value, len);
+
+				data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 2, &isnull);
+				if (isnull) ps.datname = NULL;
+				else {
+					value = PG_DETOAST_DATUM_PACKED(data);
+					ps.datname = json_escape_string_len(VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
+				}
+
+				data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 3, &isnull);
+				if (isnull) ps.usename = NULL;
+				else {
+					value = PG_DETOAST_DATUM_PACKED(data);
+					ps.usename = json_escape_string_len(VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
+				}
+
+				ps.age = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 4, &isnull));
 				if (isnull) ps.age = -1;
-				ps.is_waiting = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 7, &isnull)); 
-				ps.locked_by = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 8);
+				ps.locked_by = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 5);
 				pg_stats->active_connections++;
-			} else FREE(ps.query);
+			}
 
 			ps.is_backend = true;
 			pg_stat_list_add(pg_stats, ps);

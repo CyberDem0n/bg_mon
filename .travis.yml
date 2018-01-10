@@ -2,11 +2,21 @@ sudo: true
 dist: trusty
 language: c
 compiler: gcc
-addons:
-  postgresql: "9.6"
+matrix:
+  include:
+  - addons:
+      postgresql: "9.3"
+  - addons:
+      postgresql: "9.4"
+  - addons:
+      postgresql: "9.5"
+  - addons:
+      postgresql: "9.6"
 before_install:
   - sudo apt-get update
-  - sudo apt-get install -y postgresql-server-dev-9.6 libevent-dev
+  - version=$(postgres -V | egrep -o '[1-9][0-9]*(\.[0-9]{1,}){1,2}')
+  - version=${version%.*}
+  - sudo apt-get install -y postgresql-server-dev-$version libevent-dev pv
   - sudo pip install --upgrade cpp-coveralls
 script:
   - |
@@ -15,15 +25,15 @@ script:
     initdb test_cluster
     echo "host replication all 127.0.0.1/32 trust" >> test_cluster/pg_hba.conf
     echo "unix_socket_directories = '.'" >> test_cluster/postgresql.conf
-    echo "wal_level = 'replica'" >> test_cluster/postgresql.conf
+    echo "wal_level = 'hot_standby'" >> test_cluster/postgresql.conf
     echo "max_wal_senders = 5" >> test_cluster/postgresql.conf
-    echo "cluster_name = ' bgworker: test cluster'" >> test_cluster/postgresql.conf
+    if [ $version != "9.3" ] && [ $version != "9.4" ]; then echo "cluster_name = ' bgworker: test cluster'" >> test_cluster/postgresql.conf; fi
     echo "shared_preload_libraries = ' bg_mon'" >> test_cluster/postgresql.conf
     pg_ctl -w -D test_cluster start -o "--port=5440"
     psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(30)" &
     sleep 1
     psql -h localhost -p 5440 -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
-    ( time pg_basebackup -D test_cluster_backup -c fast -X stream -h localhost -p 5440 -r 2M )&
+    ( time pg_basebackup -D test_cluster_backup -c fast -h localhost -p 5440 -F t -D - | pv -qL 2M > /dev/null )&
     sleep 1
     echo "bg_mon.port = 8081" >> test_cluster/postgresql.conf
     pg_ctl -D test_cluster reload

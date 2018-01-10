@@ -39,7 +39,6 @@ typedef struct {
 	char *datname;
 	char *usename;
 	int32 age;
-	bool is_waiting;
 	bool is_backend;
 	char *locked_by;
 	char *query;
