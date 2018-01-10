@@ -124,7 +124,7 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 }
 
 
-static size_t json_escaped_size(const char *s, ssize_t len)
+static size_t json_escaped_size(const char *s, size_t len)
 {
 	size_t ret = 0;
 	while (len-- > 0) {
@@ -175,7 +175,7 @@ static size_t json_escaped_size(const char *s, ssize_t len)
 	return ret;
 }
 
-static char *json_escape_string_len(const char *s, ssize_t len)
+static char *json_escape_string_len(const char *s, size_t len)
 {
 	char *ret = palloc(json_escaped_size(s, len) + 3);
 	char *r = ret;
