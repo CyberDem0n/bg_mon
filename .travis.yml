@@ -12,9 +12,14 @@ matrix:
       postgresql: "9.5"
   - addons:
       postgresql: "9.6"
+  - addons:
+      postgresql: "10"
+      apt:
+        packages:
+          - postgresql-10
 before_install:
   - sudo apt-get update
-  - version=$(postgres -V | egrep -o '[1-9][0-9]*(\.[0-9]{1,}){1,2}')
+  - version=$(postgres -V | sed -n 's/^.* \([1-9][0-9]*\(\.[0-9]*\)\{0,2\}\).*/\1/p')
   - version=${version%.*}
   - sudo apt-get install -y postgresql-server-dev-$version libevent-dev pv
   - sudo pip install --upgrade cpp-coveralls
