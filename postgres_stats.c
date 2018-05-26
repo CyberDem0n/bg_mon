@@ -10,6 +10,7 @@
 #include "executor/spi.h"
 #include "lib/stringinfo.h"
 #include "pgstat.h"
+#include "utils/guc.h"
 #include "utils/snapmgr.h"
 
 #include "system_stats.h"
@@ -20,6 +21,8 @@ extern system_stat system_stats_old;
 extern pid_t PostmasterPid;
 extern int MaxBackends;
 
+static size_t cmdline_prefix_len;
+static char *cmdline_prefix;
 static size_t postmaster_pid_len;
 static char postmaster_pid[32];
 static unsigned long long mem_page_size;
@@ -97,7 +100,7 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 	for (i = 0; i < list->pos; ++i) {
 		pg_stat ps = list->values[i];
 		FREE(ps.query);
-		if (ps.is_backend) {
+		if (ps.type == PG_BACKEND) {
 			FREE(ps.usename);
 			FREE(ps.datname);
 			FREE(ps.locked_by);
@@ -446,6 +449,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 			pg_stat pgs = {0,};
 			pgs.ps = proc_stats.values[proc_stats_pos];
 			pgs.pid = pgs.ps.pid;
+			pgs.type = PG_UNDEFINED; /* unknown process */
 			pg_stat_list_add(pg_stats, pgs);
 			++proc_stats_pos;
 		} else if (pg_stats->values[pg_stats_pos].pid == proc_stats.values[proc_stats_pos].pid) {
@@ -459,44 +463,93 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
+static PgBackendType parse_cmdline(const char * const buf, const char **rest)
+{
+	PgBackendType type = PG_UNDEFINED;
+	*rest = buf;
+	if (strncmp(buf, cmdline_prefix, cmdline_prefix_len) == 0) {
+		int j;
+		const char * const cmd = buf + cmdline_prefix_len;
+		struct _backend_tab {
+			const char *name;
+			size_t name_len;
+			PgBackendType type;
+		} backend_tab[] = {
+#if PG_VERSION_NUM < 110000
+			{"archiver process   ", 19, PG_ARCHIVER},
+			{"startup process   ", 18, PG_STARTUP},
+			{"wal receiver process   ", 23, PG_WAL_RECEIVER},
+			{"wal sender process ", 19, PG_WAL_SENDER},
+			{"autovacuum launcher process   ", 30, PG_AUTOVAC_LAUNCHER},
+			{"autovacuum worker process   ", 28, PG_AUTOVAC_WORKER},
+			{"bgworker: ", 10, PG_BG_WORKER},
+			{"checkpointer process   ", 23, PG_CHECKPOINTER},
+			{"logger process   ", 17, PG_LOGGER},
+			{"stats collector process   ", 26, PG_STATS_COLLECTOR},
+			{"wal writer process   ", 21, PG_WAL_WRITER},
+			{"writer process   ", 17, PG_BG_WRITER},
+#else
+			{"archiver   ", 11, PG_ARCHIVER},
+			{"startup   ", 10, PG_STARTUP},
+			{"walreceiver   ", 14, PG_WAL_RECEIVER},
+			{"walsender ", 10, PG_WAL_SENDER},
+			{"autovacuum launcher   ", 22, PG_AUTOVAC_LAUNCHER},
+			{"autovacuum worker   ", 20, PG_AUTOVAC_WORKER},
+			{"background writer   ", 20, PG_BG_WRITER},
+			{"checkpointer   ", 15, PG_CHECKPOINTER},
+			{"logger   ", 9, PG_LOGGER},
+			{"stats collector   ", 18, PG_STATS_COLLECTOR},
+			{"walwriter   ", 12, PG_WAL_WRITER},
+
+#endif
+			{"??? process   ", 14, PG_UNKNOWN},
+			{NULL, 0, 0}
+		};
+
+		for (j = 0; backend_tab[j].name != NULL; ++j)
+			if (strncmp(cmd, backend_tab[j].name, backend_tab[j].name_len) == 0) {
+				type = backend_tab[j].type;
+				*rest = cmd + backend_tab[j].name_len;
+				break;
+			}
+
+#if PG_VERSION_NUM >= 110000
+		if (backend_tab[j].name == NULL) {
+			size_t len = strlen(cmd);
+			if (len > 3 && strcmp(cmd + len - 3, "   ") == 0) {
+				type = PG_BG_WORKER;
+				*rest = cmd;
+			}
+		}
+#endif
+	}
+	return type;
+}
+
 static void read_proc_cmdline(pg_stat *stat)
 {
 	FILE *f;
 	char buf[MAXPGPATH];
 	char proc_file[32];
+
+	if (!(stat->type == PG_UNDEFINED || stat->type == PG_ARCHIVER || stat->type == PG_STARTUP 
+			|| stat->type == PG_WAL_SENDER || stat->type == PG_WAL_RECEIVER)) return;
+
+
 	sprintf(proc_file, "/proc/%d/cmdline", stat->pid);
 
 	if ((f = fopen(proc_file, "r")) == NULL) return;
 
-	if (fgets(buf, sizeof(buf), f) && strncmp(buf, "postgres: ", 10) == 0) {
-		char *p, *lp = NULL;
+	if (fgets(buf, sizeof(buf), f)) {
+		const char *rest;
+		PgBackendType type = parse_cmdline(buf, &rest);
 
-		// cluster name can contain ' process ' string, so we need to skip all but last
-		for (p = buf + 1; (p = strstr(p + 9, " process ")) != NULL; lp = p);
-
-		if (lp != NULL) {
-			for (p = lp + 9; *p == ' '; p++);
-			if (*p) stat->query = json_escape_string(p);
-		}
-
-		if (stat->ps.cmdline == NULL) {
-			if (lp == NULL) { // no " process " delimiter string in the cmdline, it could be a bgworker process
-				// cluster name can contain ' bgworker: ' string, so we need to skip all but last
-				// buf - 2 + 11 points to the first space character after 'postgres:' string
-				for (p = buf - 2; (p = strstr(p + 11, " bgworker: ")) != NULL; lp = p);
-				if (lp == NULL) stat->ps.cmdline = pstrdup("\"unknown\"");
-				else {
-					for (p = lp + 11; *p != '\0'; ++p);
-					while (*(--p) == ' ') *p = '\0'; // trim whitespaces
-					stat->ps.cmdline = json_escape_string(lp + 1);
-				}
-			} else {
-				*lp = '\0';
-				// cmdline starts after last colon followed by whitespace
-				for (p = lp - 1; *p != ':'; --p);
-				stat->ps.cmdline = json_escape_string(p + 2);
-			}
-		}
+		stat->type = type;
+		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
+				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest)
+			stat->query = json_escape_string(rest);
+		else if (type == PG_BG_WORKER && *rest)
+			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - 3);
 	}
 	fclose(f);
 }
@@ -529,24 +582,27 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 		if (new_pos >= new_stats.pos)
 			old_stats.values[old_pos++].ps.free_cmdline = true;
 		else if (old_pos >= old_stats.pos) {
-			if (!new_stats.values[new_pos].is_backend)
+			if (new_stats.values[new_pos].type != PG_BACKEND)
 				read_proc_cmdline(new_stats.values + new_pos);
 			++new_pos;
 		} else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
-			if (new_stats.values[new_pos].is_backend)
+			if (new_stats.values[new_pos].type == PG_BACKEND)
 				old_stats.values[old_pos].ps.free_cmdline = true;
 			else {
-				if (old_stats.values[old_pos].is_backend)
+				if (old_stats.values[old_pos].type == PG_BACKEND)
 					old_stats.values[old_pos].ps.free_cmdline = true;
+				else if (old_stats.values[old_pos].type != PG_UNDEFINED && new_stats.values[new_pos].type == PG_UNDEFINED) {
+					new_stats.values[new_pos].type = old_stats.values[old_pos].type;
+					if (old_stats.values[old_pos].ps.cmdline != NULL)
+						new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
+				}
 
-				if (old_stats.values[old_pos].ps.cmdline != NULL)
-					new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
 				read_proc_cmdline(new_stats.values + new_pos);
 			}
 
 			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, itv);
 		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid) {
-			if (!new_stats.values[new_pos].is_backend)
+			if (new_stats.values[new_pos].type != PG_BACKEND)
 				read_proc_cmdline(new_stats.values + new_pos);
 			++new_pos;
 		} else // old.pid < new.pid
@@ -623,7 +679,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				pg_stats->active_connections++;
 			}
 
-			ps.is_backend = true;
+			ps.type = PG_BACKEND;
 			pg_stat_list_add(pg_stats, ps);
 		}
 
@@ -686,6 +742,21 @@ void postgres_stats_init(void)
 	pg_stat_list_init(&pg_stats_new);
 
 	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.size));
+
+	cmdline_prefix_len = 10;
+
+#if PG_VERSION_NUM >= 90500
+	if (*cluster_name != '\0')
+		cmdline_prefix_len += strlen(cluster_name) + 2;
+#endif
+
+	cmdline_prefix = palloc(cmdline_prefix_len + 1);
+	strcpy(cmdline_prefix, "postgres: ");
+#if PG_VERSION_NUM >= 90500
+	strcpy(cmdline_prefix + 10, cluster_name);
+	strcpy(cmdline_prefix + cmdline_prefix_len - 2, ": ");
+#endif
+
 	sprintf(postmaster_pid, " %d ", PostmasterPid);
 	postmaster_pid_len = strlen(postmaster_pid);
 }
