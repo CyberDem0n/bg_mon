@@ -752,8 +752,10 @@ void postgres_stats_init(void)
 	cmdline_prefix = palloc(cmdline_prefix_len + 1);
 	strcpy(cmdline_prefix, "postgres: ");
 #if PG_VERSION_NUM >= 90500
-	strcpy(cmdline_prefix + 10, cluster_name);
-	strcpy(cmdline_prefix + cmdline_prefix_len - 2, ": ");
+	if (*cluster_name != '\0') {
+		strcpy(cmdline_prefix + 10, cluster_name);
+		strcpy(cmdline_prefix + cmdline_prefix_len - 2, ": ");
+	}
 #endif
 
 	sprintf(postmaster_pid, " %d ", PostmasterPid);
