@@ -35,7 +35,7 @@ static int proc_read_int(const char *name)
 	int ret = 0;
 	FILE *f = fopen(name, "r");
 	if (f != NULL) {
-		if (fscanf(f, "%d", &ret) == 1);
+		if (fscanf(f, "%d", &ret) != 1) {}
 		fclose(f);
 	}
 	return ret;
@@ -46,7 +46,7 @@ static load_avg read_load_avg(void)
 	load_avg ret = {0, };
 	FILE *f = fopen("/proc/loadavg", "r");
 	if (f != NULL) {
-		if (fscanf(f, "%f %f %f", &ret.run_1min, &ret.run_5min, &ret.run_15min) == 3);
+		if (fscanf(f, "%f %f %f", &ret.run_1min, &ret.run_5min, &ret.run_15min) != 3) {}
 		fclose(f);
 	}
 	return ret;
@@ -66,7 +66,7 @@ static unsigned long cgroup_read_ulong(const char *name)
 	unsigned long ret = 0;
 	strcpy(memory_cgroup + memory_cgroup_len, name);
 	if ((f = fopen(memory_cgroup, "r")) != NULL) {
-		if (fscanf(f, "%lu", &ret) == 1);
+		if (fscanf(f, "%lu", &ret) != 1) {}
 		fclose(f);
 	}
 	return ret;

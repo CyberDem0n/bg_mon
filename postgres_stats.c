@@ -387,7 +387,7 @@ static int pg_stat_cmp(const void *el1, const void *el2)
 static void read_procfs(proc_stat_list *list)
 {
 	DIR *proc;
-	struct dirent buf, *dp;
+	struct dirent *dp = NULL;
 	pid_t pid;
 	char *endptr;
 	char proc_file[32] = "/proc";
@@ -402,7 +402,7 @@ static void read_procfs(proc_stat_list *list)
 		return;
 	}
 
-	while (readdir_r(proc, &buf, &dp) == 0 && dp != NULL) {
+	while (errno = 0, NULL != (dp = readdir(proc))) {
 		if (dp->d_name[0] >= '1' && dp->d_name[0] <= '9'
 				&& (pid = strtoul(dp->d_name, &endptr, 10)) > 0
 				&& endptr > dp->d_name && *endptr == '\0'
@@ -423,10 +423,9 @@ static void read_procfs(proc_stat_list *list)
 				proc_stats_add(list, ps);
 			}
 		}
-		errno = 0;
 	}
 
-	if (errno != 0)
+	if (dp == NULL && errno != 0)
 		elog(ERROR, "error reading /proc");
 
 	closedir(proc);

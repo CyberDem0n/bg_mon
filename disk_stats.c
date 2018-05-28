@@ -57,7 +57,7 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 {
 	struct stat st;
 	unsigned long long ret = 0;
-	struct dirent buf, *e;
+	struct dirent *e = NULL;
 	DIR *dir;
 
 	if (fstatat(dirfd, path, &st, dev == 0 ? 0 : AT_SYMLINK_NOFOLLOW))
@@ -77,7 +77,7 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 		return ret;
 	}
 
-	while (readdir_r(dir, &buf, &e) == 0 && e != NULL)
+	while (errno = 0, NULL != (e = readdir(dir)))
 		// skip "." and "..", don't go into lost+found
 		if ((e->d_name[0] != '.'
 				|| (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2])))
@@ -182,12 +182,12 @@ static void free_mounts(List *mounts)
 static char *resolve_dm_name(char *mapper_name)
 {
 	static char dm_name[NAME_MAX];
-	struct dirent buf, *e;
+	struct dirent *e = NULL;
 	DIR *dir = opendir("/sys/block");
 
 	if (dir == NULL) return mapper_name;
 
-	while (readdir_r(dir, &buf, &e) == 0 && e != NULL)
+	while (errno = 0, NULL != (e = readdir(dir)))
 		if (e->d_name[0] != '.' || (e->d_name[1]
 				&& (e->d_name[1] != '.' || e->d_name[2]))) {
 			int fd, dfd = dirfd(dir);
