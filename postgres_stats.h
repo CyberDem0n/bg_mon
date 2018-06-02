@@ -17,7 +17,9 @@ typedef enum PgBackendType
 	PG_WAL_WRITER,
 	PG_ARCHIVER,
 	PG_LOGGER,
-	PG_STATS_COLLECTOR
+	PG_STATS_COLLECTOR,
+	PG_LOGICAL_LAUNCHER,
+	PG_LOGICAL_WORKER
 } PgBackendType;
 
 typedef struct {

@@ -134,6 +134,10 @@ static const char *process_type(pg_stat p)
 			return "\"logger\"";
 		case PG_STATS_COLLECTOR:
 			return "\"stats collector\"";
+		case PG_LOGICAL_LAUNCHER:
+			return "\"logical replication launcher\"";
+		case PG_LOGICAL_WORKER:
+			return "\"logical replication worker\"";
 		default:
 			return NULL;
 	}
@@ -208,11 +212,11 @@ static void prepare_statistics_output(struct evbuffer *evb)
 		if (s.type != PG_BACKEND || s.query != NULL) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
-			const char *type = process_type(s);
-			if (type == NULL || *type == '\0') continue;
+			const char *tmp = process_type(s);
+			if (tmp == NULL || *tmp == '\0') continue;
 			if (is_first) is_first = false;
 			else evbuffer_add_printf(evb, ", ");
-			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, type, ps.state);
+			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, tmp, ps.state);
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
@@ -222,12 +226,16 @@ static void prepare_statistics_output(struct evbuffer *evb)
 
 				if (s.age > -1)
 					evbuffer_add_printf(evb, ", \"age\": %d", s.age);
-
-				evbuffer_add_printf(evb, ", \"database\": %s", s.datname == NULL ? "null" : s.datname);
-				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 			}
-			if (s.query != NULL)
-				evbuffer_add_printf(evb, ", \"query\": %s", s.query);
+
+			if (s.datname != NULL || s.type == PG_BACKEND)
+				evbuffer_add_printf(evb, ", \"database\": %s", s.datname == NULL ? "null" : s.datname);
+			if (s.usename != NULL || s.type == PG_BACKEND)
+				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
+
+			tmp = s.type == PG_LOGICAL_WORKER ? ps.cmdline : s.query;
+			if (tmp != NULL)
+				evbuffer_add_printf(evb, ", \"query\": %s", tmp);
 			evbuffer_add_printf(evb, "}");
 		}
 	}

@@ -72,10 +72,16 @@ static const char * const pg_stat_activity_query =
 		" WHEN state = 'active' THEN query"
 		" ELSE state END::text AS query,"
 		" pid IN (SELECT * FROM lockers)"
+#if PG_VERSION_NUM >= 100000
+		", CASE backend_type WHEN 'autovacuum worker' THEN 1 WHEN 'walsender' THEN 8 WHEN 'client backend' THEN 2 ELSE -2 END"
+#endif
 	" FROM pg_stat_activity a"
 	" LEFT JOIN locked_processes USING (pid) "
 	"WHERE pid != pg_backend_pid()"
-	" AND datname IS NOT NULL";
+#if PG_VERSION_NUM >= 100000
+	" AND backend_type IN ('client backend', 'autovacuum worker', 'walsender', 'background worker')"
+#endif
+;
 
 typedef struct {
 	proc_stat *values;
@@ -100,11 +106,9 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 	for (i = 0; i < list->pos; ++i) {
 		pg_stat ps = list->values[i];
 		FREE(ps.query);
-		if (ps.type == PG_BACKEND) {
-			FREE(ps.usename);
-			FREE(ps.datname);
-			FREE(ps.locked_by);
-		}
+		FREE(ps.usename);
+		FREE(ps.datname);
+		FREE(ps.locked_by);
 
 		if (ps.ps.free_cmdline)
 			FREE(ps.ps.cmdline);
@@ -481,6 +485,8 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			{"wal sender process ", 19, PG_WAL_SENDER},
 			{"autovacuum launcher process   ", 30, PG_AUTOVAC_LAUNCHER},
 			{"autovacuum worker process   ", 28, PG_AUTOVAC_WORKER},
+			{"bgworker: logical replication launcher   ", 41, PG_LOGICAL_LAUNCHER},
+			{"bgworker: logical replication worker for ", 41, PG_LOGICAL_WORKER},
 			{"bgworker: ", 10, PG_BG_WORKER},
 			{"checkpointer process   ", 23, PG_CHECKPOINTER},
 			{"logger process   ", 17, PG_LOGGER},
@@ -494,6 +500,8 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			{"walsender ", 10, PG_WAL_SENDER},
 			{"autovacuum launcher   ", 22, PG_AUTOVAC_LAUNCHER},
 			{"autovacuum worker   ", 20, PG_AUTOVAC_WORKER},
+			{"logical replication launcher   ", 31, PG_LOGICAL_LAUNCHER},
+			{"logical replication worker for ", 31, PG_LOGICAL_WORKER},
 			{"background writer   ", 20, PG_BG_WRITER},
 			{"checkpointer   ", 15, PG_CHECKPOINTER},
 			{"logger   ", 9, PG_LOGGER},
@@ -531,9 +539,10 @@ static void read_proc_cmdline(pg_stat *stat)
 	char buf[MAXPGPATH];
 	char proc_file[32];
 
-	if (!(stat->type == PG_UNDEFINED || stat->type == PG_ARCHIVER || stat->type == PG_STARTUP 
-			|| stat->type == PG_WAL_SENDER || stat->type == PG_WAL_RECEIVER)) return;
-
+	if (stat->type != PG_UNDEFINED && stat->type != PG_ARCHIVER
+			&& stat->type != PG_STARTUP && stat->type != PG_WAL_RECEIVER
+			&& (stat->type != PG_WAL_SENDER || stat->query))
+		return;
 
 	sprintf(proc_file, "/proc/%d/cmdline", stat->pid);
 
@@ -545,9 +554,16 @@ static void read_proc_cmdline(pg_stat *stat)
 
 		stat->type = type;
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
-				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest)
+				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest) {
+#if PG_VERSION_NUM >= 100000
+			if (type == PG_WAL_SENDER && stat->usename) {
+				size_t len = strlen(stat->usename) - 2;
+				if (strncmp(rest, stat->usename + 1, len) == 0 && rest[len] == ' ')
+					rest += len + 1;
+			}
+#endif
 			stat->query = json_escape_string(rest);
-		else if (type == PG_BG_WORKER && *rest)
+		} else if ((type == PG_LOGICAL_WORKER || type == PG_BG_WORKER) && *rest)
 			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - 3);
 	}
 	fclose(f);
@@ -580,31 +596,22 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 	while (old_pos < old_stats.pos || new_pos < new_stats.pos) {
 		if (new_pos >= new_stats.pos)
 			old_stats.values[old_pos++].ps.free_cmdline = true;
-		else if (old_pos >= old_stats.pos) {
-			if (new_stats.values[new_pos].type != PG_BACKEND)
-				read_proc_cmdline(new_stats.values + new_pos);
-			++new_pos;
-		} else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
-			if (new_stats.values[new_pos].type == PG_BACKEND)
+		else if (old_pos >= old_stats.pos)
+			read_proc_cmdline(new_stats.values + new_pos++);
+		else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
+			if (old_stats.values[old_pos].ps.start_time != new_stats.values[new_pos].ps.start_time)
 				old_stats.values[old_pos].ps.free_cmdline = true;
-			else {
-				if (old_stats.values[old_pos].type == PG_BACKEND)
-					old_stats.values[old_pos].ps.free_cmdline = true;
-				else if (old_stats.values[old_pos].type != PG_UNDEFINED && new_stats.values[new_pos].type == PG_UNDEFINED) {
-					new_stats.values[new_pos].type = old_stats.values[old_pos].type;
-					if (old_stats.values[old_pos].ps.cmdline != NULL)
-						new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
-				}
-
-				read_proc_cmdline(new_stats.values + new_pos);
+			else if (old_stats.values[old_pos].type != PG_UNDEFINED && new_stats.values[new_pos].type == PG_UNDEFINED) {
+				new_stats.values[new_pos].type = old_stats.values[old_pos].type;
+				if (new_stats.values[new_pos].type == PG_LOGICAL_WORKER || new_stats.values[new_pos].type == PG_BG_WORKER)
+					new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
 			}
 
+			read_proc_cmdline(new_stats.values + new_pos);
 			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, itv);
-		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid) {
-			if (new_stats.values[new_pos].type != PG_BACKEND)
-				read_proc_cmdline(new_stats.values + new_pos);
-			++new_pos;
-		} else // old.pid < new.pid
+		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid)
+			read_proc_cmdline(new_stats.values + new_pos++);
+		else // old.pid < new.pid
 			old_stats.values[old_pos++].ps.free_cmdline = true;
 	}
 }
@@ -641,6 +648,11 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		MemoryContext oldcxt = MemoryContextSwitchTo(uppercxt);
 		for (a = 0; a < SPI_processed; a++) {
 			pg_stat ps = {0, };
+#if PG_VERSION_NUM >= 100000
+			ps.type = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 8, &isnull));
+#else
+			ps.type = PG_BACKEND;
+#endif
 
 			is_idle = true;
 
@@ -653,10 +665,14 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				text_value = VARDATA_ANY(value);
 				len = VARSIZE_ANY_EXHDR(value);
 				is_idle = len == 4 && !strncmp(text_value, "idle", 4);
+#if PG_VERSION_NUM < 100000
+				if (strncmp(text_value, "autovacuum: ", 12) == 0)
+					ps.type = PG_AUTOVAC_WORKER;
+#endif
 			}
 
-			if (is_locker || !is_idle) {
-				ps.query = isnull ? NULL : json_escape_string_len(text_value, len);
+			if (is_locker || !is_idle || ps.type != PG_BACKEND) {
+				ps.query = isnull || len == 0 ? NULL : json_escape_string_len(text_value, len);
 
 				data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 2, &isnull);
 				if (isnull) ps.datname = NULL;
@@ -678,7 +694,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				pg_stats->active_connections++;
 			}
 
-			ps.type = PG_BACKEND;
 			pg_stat_list_add(pg_stats, ps);
 		}
 
