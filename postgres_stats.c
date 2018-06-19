@@ -458,7 +458,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		} else if (pg_stats->values[pg_stats_pos].pid == proc_stats.values[proc_stats_pos].pid) {
 			pg_stats->values[pg_stats_pos++].ps = proc_stats.values[proc_stats_pos++];
 		} else { /* pg_stats->values[pg_pos].pid < proc_stats.values[ps_pos].pid, new backend? */
-			++pg_stats_pos;
+			pg_stats->values[pg_stats_pos++].ps.state = 'S';
 		}
 	}
 
