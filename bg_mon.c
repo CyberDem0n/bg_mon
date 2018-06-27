@@ -23,6 +23,7 @@
 #include "postgres_stats.h"
 #include "disk_stats.h"
 #include "system_stats.h"
+#include "net_stats.h"
 #ifdef HAS_LIBBROTLI
 #include "brotli_utils.h"
 #endif
@@ -121,6 +122,7 @@ initialize_bg_mon()
 	postgres_stats_init();
 	disk_stats_init();
 	system_stats_init();
+	net_stats_init();
 }
 
 static const char *process_type(pg_stat p)
@@ -163,7 +165,35 @@ static const char *process_type(pg_stat p)
 	}
 }
 
-static struct evbuffer *prepare_statistics_output(struct timeval time, system_stat s, pg_stat_list p, disk_stats ds)
+static void device_io_output(struct evbuffer *evb, device_stat *stats, int id)
+{
+	device_stat d = stats[id];
+	evbuffer_add_printf(evb, "\"name\": \"%s\", \"io\": {", d.name);
+	evbuffer_add_printf(evb, "\"read\": %.2f, \"reads_ps\": %.2f", d.read_diff, d.read_completed_diff);
+	evbuffer_add_printf(evb, ", \"write\": %.2f, \"writes_ps\": %.2f", d.write_diff, d.write_completed_diff);
+	if (d.extended) {
+		evbuffer_add_printf(evb, ", \"read_merges\": %.2f, \"write_merges\": %.2f", d.read_merges_diff, d.write_merges_diff);
+		evbuffer_add_printf(evb, ", \"average_queue_length\": %.2f", d.average_queue_length);
+		evbuffer_add_printf(evb, ", \"average_request_size\": %.2f", d.average_request_size);
+		evbuffer_add_printf(evb, ", \"average_service_time\": %.2f", d.average_service_time);
+		evbuffer_add_printf(evb, ", \"await\": %.2f, \"read_await\": %.2f", d.await, d.read_await);
+		evbuffer_add_printf(evb, ", \"write_await\": %.2f, \"util\": %.2f", d.write_await, d.util);
+	}
+	if (d.slave_size > 0) {
+		int n;
+		evbuffer_add_printf(evb, ", \"slaves\": [");
+		for (n = 0; n < d.slave_size; ++n) {
+			if (n > 0) evbuffer_add_printf(evb, ", ");
+			evbuffer_add_printf(evb, "{");
+			device_io_output(evb, stats, d.slaves[n]);
+			evbuffer_add_printf(evb, "}");
+		}
+		evbuffer_add_printf(evb, "]");
+	}
+	evbuffer_add_printf(evb, "}");
+}
+
+static struct evbuffer *prepare_statistics_output(struct timeval time, system_stat s, pg_stat_list p, disk_stats ds, net_stats ns)
 {
 	struct evbuffer *evb = evbuffer_new();
 	unsigned long long ts = (unsigned long long)time.tv_sec*1000 + (unsigned long long)((double)time.tv_usec/1000.0);
@@ -201,27 +231,35 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	}
 
 	evbuffer_add_printf(evb, "}}, \"disk_stats\": {");
-	for (i = 0; i < ds.size; ++i) {
-		disk_stat d = ds.values[i];
-		if (is_first) is_first = false;
-		else evbuffer_add_printf(evb, ", ");
-		evbuffer_add_printf(evb, "\"%s\": {\"device\": {\"name\": \"%s\", ", d.type, d.device);
-		evbuffer_add_printf(evb, "\"space\": {\"total\": %llu, \"left\": %llu}, ", d.size, d.free);
-		evbuffer_add_printf(evb, "\"io\": {\"read\": %.2f, \"reads_ps\": %.2f", d.read_diff, d.read_completed_diff);
-		evbuffer_add_printf(evb, ", \"write\": %.2f, \"writes_ps\": %.2f", d.write_diff, d.write_completed_diff);
-		if (d.extended) {
-			evbuffer_add_printf(evb, ", \"read_merges\": %.2f, \"write_merges\": %.2f", d.read_merges_diff, d.write_merges_diff);
-			evbuffer_add_printf(evb, ", \"average_queue_length\": %.2f", d.average_queue_length);
-			evbuffer_add_printf(evb, ", \"average_request_size\": %.2f", d.average_request_size);
-			evbuffer_add_printf(evb, ", \"average_service_time\": %.2f", d.average_service_time);
-			evbuffer_add_printf(evb, ", \"await\": %.2f, \"read_await\": %.2f", d.await, d.read_await);
-			evbuffer_add_printf(evb, ", \"write_await\": %.2f, \"util\": %.2f", d.write_await, d.util);
-		}
-		evbuffer_add_printf(evb, "}}, \"directory\": {\"name\": \"%s\", \"size\": %llu}}", d.directory, d.du);
+	for (i = 0; i < sizeof(ds.values)/sizeof(disk_stat); ++i) {
+		disk_stat device = ds.values[i];
+		if (i > 0) evbuffer_add_printf(evb, ", ");
+		evbuffer_add_printf(evb, "\"%s\": {\"device\": {\"space\": ", device.type);
+		evbuffer_add_printf(evb, "{\"total\": %llu, \"left\": %llu}, ", device.size, device.free);
+		device_io_output(evb, ds.dstats.values, device.device_id);
+		evbuffer_add_printf(evb, "}, \"directory\": {\"name\": \"%s\", \"size\": %llu}}", device.directory, device.du);
 	}
+	evbuffer_add_printf(evb, "}, \"net_stats\": {");
+	for (i = 0; i < ns.size; ++i)
+		if (ns.values[i].is_used && ns.values[i].has_statistics) {
+			net_stat n = ns.values[i];
+			if (is_first) is_first = false;
+			else evbuffer_add_printf(evb, ", ");
+			evbuffer_add_printf(evb, "\"%s\": {\"rx_kbytes\": %.2f, ", n.name, n.rx_bytes_diff / 1024.0);
+			evbuffer_add_printf(evb, "\"rx_packets\": %.2f, ", n.rx_packets_diff);
+			evbuffer_add_printf(evb, "\"rx_errors\": %.2f, ", n.rx_errors_diff);
+			evbuffer_add_printf(evb, "\"rx_util\": %.2f, ", n.rx_util);
+			evbuffer_add_printf(evb, "\"tx_kbytes\": %.2f, ", n.tx_bytes_diff / 1024.0);
+			evbuffer_add_printf(evb, "\"tx_packets\": %.2f, ", n.tx_packets_diff);
+			evbuffer_add_printf(evb, "\"tx_errors\": %.2f, ", n.tx_errors_diff);
+			evbuffer_add_printf(evb, "\"tx_util\": %.2f, ", n.tx_util);
+			evbuffer_add_printf(evb, "\"util\": %.2f, ", n.util);
+			evbuffer_add_printf(evb, "\"saturation\": %.2f, ", n.saturation_diff);
+			evbuffer_add_printf(evb, "\"collisions\": %.2f}", n.collisions_diff);
+		}
+
 	is_first = true;
 	evbuffer_add_printf(evb, "}, \"processes\": [");
-
 	for (i = 0; i < p.pos; ++i) {
 		pg_stat s = p.values[i];
 		if (s.type != PG_BACKEND || s.query != NULL) {
@@ -231,7 +269,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 			if (tmp == NULL || *tmp == '\0') continue;
 			if (is_first) is_first = false;
 			else evbuffer_add_printf(evb, ", ");
-			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, tmp, ps.state);
+			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, tmp, ps.state ? ps.state : 'S');
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
@@ -374,9 +412,10 @@ static void update_statistics(struct timeval time)
 {
 	system_stat s = get_system_stats();
 	pg_stat_list p = get_postgres_stats();
-	disk_stats d =  get_disk_stats();
+	disk_stats d = get_disk_stats();
+	net_stats n = get_net_stats();
 
-	struct evbuffer *evb = prepare_statistics_output(time, s, p, d);
+	struct evbuffer *evb = prepare_statistics_output(time, s, p, d, n);
 
 	pthread_mutex_lock(&lock);
 
