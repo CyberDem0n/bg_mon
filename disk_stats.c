@@ -16,7 +16,6 @@
 
 const int DATA = 0;
 const int WAL = 1;
-#define DISK_DEVICES 2
 
 extern system_stat system_stats_old;
 
@@ -39,6 +38,7 @@ static char *data_dev;
 static char *wal_dev;
 
 static disk_stats disk_stats_old = {0,};
+static disk_stats disk_stats_next = {0,};
 static pthread_mutex_t du_lock;
 static pthread_cond_t du_cond;
 static bool run_du;
@@ -285,7 +285,7 @@ static char *get_device(List *mounts, const char *path)
 	return best_match->me_devname; 
 }
 
-static void read_io_stats(disk_stats *ds)
+static void read_io_stats(device_stats *ds)
 {
 	int n, i = 0;
 	char buf[256], device_name[128];
@@ -293,7 +293,7 @@ static void read_io_stats(disk_stats *ds)
 	unsigned long read_sectors_or_write_completed, read_time_or_write_sectors;
 	unsigned long write_completed, write_merges, write_sectors;
 	unsigned int ios_in_progress, write_time, total_time, weighted_time;
-	disk_stat *stats = ds->values;
+	device_stat *stats = ds->values;
 	FILE *io = fopen("/proc/diskstats", "r");
 
 	if (io == NULL) return;
@@ -306,7 +306,8 @@ static void read_io_stats(disk_stats *ds)
 					&ios_in_progress, &total_time, &weighted_time);
 		if (n == 12) {
 			for (n = 0; n < ds->size; ++n) {
-				if (strcmp(stats[n].device, device_name) == 0) {
+				if (strcmp(stats[n].name, device_name) == 0) {
+					stats[n].is_used = true;
 					stats[n].read_completed = read_completed;
 					stats[n].read_merges = read_merges_or_read_sectors;
 					stats[n].read_sectors = read_sectors_or_write_completed;
@@ -318,12 +319,13 @@ static void read_io_stats(disk_stats *ds)
 					stats[n].ios_in_progress = ios_in_progress;
 					stats[n].total_time = total_time;
 					stats[n].weighted_time = weighted_time;
-					stats[n].extended = 1;
+					stats[n].extended = true;
 				}
 			}
 		} else if (n == 5) {
 			for (n = 0; n < ds->size; ++n) {
-				if (strcmp(stats[n].device, device_name) == 0) {
+				if (strcmp(stats[n].name, device_name) == 0) {
+					stats[n].is_used = true;
 					stats[n].read_completed = read_completed;
 					stats[n].read_sectors = read_merges_or_read_sectors;
 					stats[n].write_completed = read_sectors_or_write_completed;
@@ -335,17 +337,28 @@ static void read_io_stats(disk_stats *ds)
 	fclose(io);
 }
 
-static void diff_disk_stats(disk_stats *new_stats)
+static void diff_disk_stats(device_stats *new_stats)
 {
-	int i;
+	int i, j = 0;
+	device_stat o;
 	unsigned long long itv;
-	if (disk_stats_old.uptime == 0) return;
 
-	itv = new_stats->uptime - disk_stats_old.uptime;
+	new_stats->uptime = system_stats_old.uptime;
+
+	if (disk_stats_old.dstats.uptime == 0) return;
+
+	itv = new_stats->uptime - disk_stats_old.dstats.uptime;
 
 	for (i = 0; i < new_stats->size; ++i) {
-		disk_stat o = disk_stats_old.values[i];
-		disk_stat *n = new_stats->values + i;
+		device_stat *n = new_stats->values + i;
+
+		while (j < disk_stats_old.dstats.size && !disk_stats_old.dstats.values[j].is_used)
+			++j;
+
+		if (j >= disk_stats_old.dstats.size)
+			break;
+
+		o = disk_stats_old.dstats.values[j++];
 
 		if (n->extended && o.extended) {
 			double cmpl_diff = n->read_completed + n->write_completed - o.read_completed - o.write_completed;
@@ -370,20 +383,108 @@ static void diff_disk_stats(disk_stats *new_stats)
 	}
 }
 
+static unsigned char find_or_add_device(device_stats *devices, const char *name);
+
+static void resolve_device_hierarchy(device_stats *devs, int id)
+{
+	int len, slave_id, i = 0;
+	DIR *dir;
+	struct dirent *e = NULL;
+	char slaves[255] = "/sys/block/";
+	char path[PATH_MAX];
+	char *p;
+
+	strcpy(slaves + 11, devs->values[id].name);
+	strcpy(slaves + 11 + devs->values[id].name_len, "/slaves");
+
+	if (NULL != (dir = opendir(slaves))) {
+		while (errno = 0, NULL != (e = readdir(dir)))
+			if (e->d_name[0] != '.' || (e->d_name[1]
+					&& (e->d_name[1] != '.' || e->d_name[2]))) {
+				p = NULL;
+				snprintf(path, sizeof(path), "%s/start", e->d_name);
+				if (faccessat(dirfd(dir), path, R_OK, 0) == 0 &&
+						(len = readlinkat(dirfd(dir), e->d_name, path, sizeof(path) - 1)) > 0) {
+					path[len] = '\0';
+					if ((p = strrchr(path, '/'))) {
+						*p = '\0';
+						if ((p = strrchr(path, '/')))
+							*(p++) = '\0';
+					}
+				}
+				slave_id = find_or_add_device(devs, p == NULL ? e->d_name : p);
+				devs->values[id].slaves[i++] = slave_id;
+			}
+		closedir(dir);
+	}
+	devs->values[id].slave_size = i;
+}
+
+static unsigned char find_or_add_device(device_stats *devices, const char *name)
+{
+	int i, new_id = -1;
+
+	for (i = 0; i < devices->size; ++i)
+		if (0 == strcmp(devices->values[i].name, name)) {
+			new_id = i;
+			goto resolve_hierarchy;
+		}
+
+	if (new_id == -1 && (new_id = devices->size++) >= devices->len)
+		devices->values = repalloc(devices->values, sizeof(device_stat)*(devices->len = devices->size));
+
+	memset(devices->values + new_id, 0, sizeof(device_stat));
+	devices->values[new_id].name = pstrdup(name);
+	devices->values[new_id].name_len = strlen(name);
+
+resolve_hierarchy:
+	resolve_device_hierarchy(devices, new_id);
+	return new_id;
+}
+
+static bool copy_device_stats(device_stats o, device_stats *n)
+{
+	bool ret = false;
+	int i, len = 0;
+	for (i = 0; i < o.size; ++i)
+		if (o.values[i].is_used)
+			++len;
+		else {
+			FREE(o.values[i].name);
+			ret = true;
+		}
+
+	if (len == 0) return true;
+	else if (len > n->len)
+		n->values = repalloc(n->values, (n->len = len)*sizeof(device_stat));
+
+	n->size = 0;
+
+	for (i = 0; i < o.size; ++i)
+		if (o.values[i].is_used) {
+			memset(n->values + n->size, 0, sizeof(device_stat));
+			if (ret) n->values[n->size].slave_size = 0;
+			else {
+				memcpy(n->values[n->size].slaves, o.values[i].slaves, sizeof(o.values[i].slaves));
+				n->values[n->size].slave_size = o.values[i].slave_size;
+			}
+			n->values[n->size].name = o.values[i].name;
+			n->values[n->size++].name_len = o.values[i].name_len;
+		}
+	return ret;
+}
+
 disk_stats get_disk_stats(void)
 {
 	struct statvfs st;
-	disk_stats ret = {0, };
+	disk_stats ret = disk_stats_next;
 	disk_stat *disk_stats = ret.values;
-	ret.size = DISK_DEVICES; // Only data + pg_wal
 
 	disk_stats[DATA].type = "data";
 	disk_stats[DATA].directory = DataDir;
-	disk_stats[DATA].device = data_dev;
 
 	disk_stats[WAL].type = "wal";
 	disk_stats[WAL].directory = wal_directory;
-	disk_stats[WAL].device = wal_dev;
 
 	du_counter = (du_counter + 1) % 30;
 	pthread_mutex_lock(&du_lock);
@@ -392,6 +493,16 @@ disk_stats get_disk_stats(void)
 	if (du_counter == 0)
 		run_du = true;
 	pthread_mutex_unlock(&du_lock);
+
+	if (copy_device_stats(disk_stats_old.dstats, &ret.dstats) || du_counter == 0) {
+		if (data_dev)
+			disk_stats[DATA].device_id = find_or_add_device(&ret.dstats, data_dev);
+
+		if (wal_dev) {
+			if (wal_dev == data_dev) disk_stats[WAL].device_id = disk_stats[DATA].device_id;
+			else disk_stats[WAL].device_id = find_or_add_device(&ret.dstats, wal_dev);
+		}
+	}
 
 	if (du_counter == 0)
 		pthread_cond_signal(&du_cond);
@@ -409,11 +520,11 @@ disk_stats get_disk_stats(void)
 		disk_stats[WAL].free = st.f_bavail * st.f_bsize / 1024;
 	}
 
-	read_io_stats(&ret);
-
-	ret.uptime = system_stats_old.uptime;
+	read_io_stats(&ret.dstats);
 	
-	diff_disk_stats(&ret);
+	diff_disk_stats(&ret.dstats);
+
+	disk_stats_next = disk_stats_old;
 
 	return disk_stats_old = ret;
 }
@@ -439,6 +550,15 @@ void disk_stats_init(void)
 	}
 
 	free_mounts(mounts);
+
+	disk_stats_old.dstats.values = palloc(sizeof(device_stat));
+	disk_stats_old.dstats.len = 1;
+	disk_stats_old.dstats.size = 0;
+	disk_stats_old.dstats.uptime = 0;
+
+	disk_stats_next.dstats.values = palloc(sizeof(device_stat));
+	disk_stats_next.dstats.len = 1;
+	disk_stats_next.dstats.uptime = 0;
 
 	run_du = false;
 	du_counter = 0;
