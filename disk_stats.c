@@ -470,7 +470,7 @@ static bool copy_device_stats(device_stats o, device_stats *n)
 			}
 			n->values[n->size].name = o.values[i].name;
 			n->values[n->size++].name_len = o.values[i].name_len;
-		}
+		} else FREE(o.values[i].name);
 	return ret;
 }
 
