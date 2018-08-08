@@ -1,6 +1,27 @@
 #ifndef _POSTGRES_STATS_H_
 #define _POSTGRES_STATS_H_
 
+typedef enum PgBackendType
+{
+	PG_UNDEFINED = -2,
+	PG_UNKNOWN = -1,
+	PG_AUTOVAC_LAUNCHER = 0,
+	PG_AUTOVAC_WORKER,
+	PG_BACKEND,
+	PG_BG_WORKER,
+	PG_BG_WRITER,
+	PG_CHECKPOINTER,
+	PG_STARTUP,
+	PG_WAL_RECEIVER,
+	PG_WAL_SENDER,
+	PG_WAL_WRITER,
+	PG_ARCHIVER,
+	PG_LOGGER,
+	PG_STATS_COLLECTOR,
+	PG_LOGICAL_LAUNCHER,
+	PG_LOGICAL_WORKER
+} PgBackendType;
+
 typedef struct {
 	bool available;
 	unsigned long long read_bytes;
@@ -39,7 +60,7 @@ typedef struct {
 	char *datname;
 	char *usename;
 	int32 age;
-	bool is_backend;
+	PgBackendType type;
 	char *locked_by;
 	char *query;
 	proc_stat ps;

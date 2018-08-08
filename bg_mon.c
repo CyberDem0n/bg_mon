@@ -134,6 +134,46 @@ static void device_io_output(struct evbuffer *evb, device_stat *stats, int id)
 	evbuffer_add_printf(evb, "}");
 }
 
+static const char *process_type(pg_stat p)
+{
+	switch (p.type) {
+		case PG_UNKNOWN:
+			return "\"???\"";
+		case PG_AUTOVAC_LAUNCHER:
+			return "\"autovacuum launcher\"";
+		case PG_AUTOVAC_WORKER:
+			return "\"autovacuum worker\"";
+		case PG_BACKEND:
+			return "\"backend\"";
+		case PG_BG_WORKER:
+			return p.ps.cmdline;
+		case PG_BG_WRITER:
+			return "\"bgwriter\"";
+		case PG_CHECKPOINTER:
+			return "\"checkpointer\"";
+		case PG_STARTUP:
+			return "\"startup\"";
+		case PG_WAL_RECEIVER:
+			return "\"walreceiver\"";
+		case PG_WAL_SENDER:
+			return "\"walsender\"";
+		case PG_WAL_WRITER:
+			return "\"walwriter\"";
+		case PG_ARCHIVER:
+			return "\"archiver\"";
+		case PG_LOGGER:
+			return "\"logger\"";
+		case PG_STATS_COLLECTOR:
+			return "\"stats collector\"";
+		case PG_LOGICAL_LAUNCHER:
+			return "\"logical replication launcher\"";
+		case PG_LOGICAL_WORKER:
+			return "\"logical replication worker\"";
+		default:
+			return NULL;
+	}
+}
+
 static void prepare_statistics_output(struct evbuffer *evb)
 {
 	bool is_first = true;
@@ -211,28 +251,33 @@ static void prepare_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, "}, \"processes\": [");
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
-		if ((!s.is_backend && s.ps.cmdline != NULL) || s.query != NULL) {
+		if (s.type != PG_BACKEND || s.query != NULL) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
-			char *type = s.is_backend ? "\"backend\"" : ps.cmdline;
+			const char *tmp = process_type(s);
+			if (tmp == NULL || *tmp == '\0') continue;
 			if (is_first) is_first = false;
 			else evbuffer_add_printf(evb, ", ");
-			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, type, ps.state ? ps.state : 'S');
+			evbuffer_add_printf(evb, "{\"pid\": %d, \"type\": %s, \"state\": \"%c\", ", s.pid, tmp, ps.state ? ps.state : 'S');
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
-			if (s.is_backend) {
+			if (s.type == PG_BACKEND) {
 				if (s.locked_by != NULL)
 					evbuffer_add_printf(evb, ", \"locked_by\": [%s]", s.locked_by);
 
 				if (s.age > -1)
 					evbuffer_add_printf(evb, ", \"age\": %d", s.age);
-
-				evbuffer_add_printf(evb, ", \"database\": %s", s.datname == NULL ? "null" : s.datname);
-				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 			}
-			if (s.query != NULL)
-				evbuffer_add_printf(evb, ", \"query\": %s", s.query);
+
+			if (s.datname != NULL || s.type == PG_BACKEND)
+				evbuffer_add_printf(evb, ", \"database\": %s", s.datname == NULL ? "null" : s.datname);
+			if (s.usename != NULL || s.type == PG_BACKEND)
+				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
+
+			tmp = s.type == PG_LOGICAL_WORKER ? ps.cmdline : s.query;
+			if (tmp != NULL)
+				evbuffer_add_printf(evb, ", \"query\": %s", tmp);
 			evbuffer_add_printf(evb, "}");
 		}
 	}
@@ -303,8 +348,11 @@ bg_mon_main(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to our database */
-	BackgroundWorkerInitializeConnection("postgres", NULL);
-
+	BackgroundWorkerInitializeConnection("postgres", NULL
+#if PG_VERSION_NUM >= 110000
+										,0
+#endif
+	);
 	initialize_bg_mon();
 	evthread_use_pthreads();
 
