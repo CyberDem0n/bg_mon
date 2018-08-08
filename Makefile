@@ -4,12 +4,12 @@ UIFILENAME = bg_mon.html
 PG_CPPFLAGS = -DUIFILE='"$(DESTDIR)$(datadir)/$(datamoduledir)/$(UIFILENAME)"'
 HAS_LIBBROTLI := $(shell ldconfig -p 2> /dev/null | grep -q libbrotlienc; echo $$?)
 ifeq ($(HAS_LIBBROTLI),0)
-    PG_CPPFLAGS += -DHAS_LIBBROTLI
+	PG_CPPFLAGS += -DHAS_LIBBROTLI
 else
-    OBJS := $(filter-out brotli_utils.o,$(OBJS))
+	OBJS := $(filter-out brotli_utils.o,$(OBJS))
 endif
 ifdef ENABLE_GCOV
-    PG_CPPFLAGS += -g -ggdb -pg -O0 -fprofile-arcs -ftest-coverage
+	PG_CPPFLAGS += -g -ggdb -pg -O0 -fprofile-arcs -ftest-coverage
 endif
 DATA = $(UIFILENAME)
 PGFILEDESC = 'Background worker for monitoring postgresql instance from inside'
@@ -27,8 +27,8 @@ endif
 
 SHLIB_LINK += -levent -levent_pthreads -pthread
 ifeq ($(HAS_LIBBROTLI),0)
-    SHLIB_LINK += -lbrotlienc
+	SHLIB_LINK += -lbrotlienc
 endif
 ifdef ENABLE_GCOV
-    SHLIB_LINK += -lgcov --coverage
+	SHLIB_LINK += -lgcov --coverage
 endif
