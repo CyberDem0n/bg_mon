@@ -1,10 +1,10 @@
 #ifndef _DISK_STATS_H_
 #define _DISK_STATS_H_
 
-typedef struct {
-	unsigned long long du;
-	unsigned long long size;
-	unsigned long long free;
+typedef struct device_stat {
+	char *name;
+	size_t name_len;
+	bool is_used;
 	unsigned long read_completed;
 	unsigned long read_merges;
 	unsigned long read_sectors;
@@ -34,16 +34,31 @@ typedef struct {
 
 	double util;
 
-	char extended;
-	char *type;
-	char *directory;
-	char *device;
-} disk_stat;
+	bool extended;
+
+	size_t slave_size;
+	char slaves[64];
+} device_stat;
 
 typedef struct {
 	unsigned long long uptime;
+	device_stat *values;
+	unsigned char size;
+	unsigned int len;
+} device_stats;
+
+typedef struct disk_stat {
+	unsigned long long du;
+	unsigned long long size;
+	unsigned long long free;
+	char *type;
+	char *directory;
+	int device_id;
+} disk_stat;
+
+typedef struct {
 	disk_stat values[2];
-	size_t size;
+	device_stats dstats;
 } disk_stats;
 
 void disk_stats_init(void);

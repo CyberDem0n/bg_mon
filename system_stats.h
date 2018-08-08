@@ -6,6 +6,7 @@
 double SC_CLK_TCK;
 
 #define MINIMUM(a,b)		((a) < (b) ? (a) : (b))
+#define MAXIMUM(a,b)		((a) > (b) ? (a) : (b))
 #define FREE(v)				do {if (v != NULL) {pfree(v); v = NULL;}} while(0)
 #define S_VALUE(m,n,p)		(((double) ((n) - (m))) / (p) * SC_CLK_TCK)
 #define SP_VALUE(m,n,p)		(n < m ? 0 : ((double) ((n) - (m))) / (p) * 100)
