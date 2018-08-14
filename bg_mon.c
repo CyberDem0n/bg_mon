@@ -262,7 +262,7 @@ static void prepare_statistics_output(struct evbuffer *evb)
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
-			if (s.type == PG_BACKEND) {
+			if (s.type == PG_BACKEND || s.type == PG_AUTOVAC_WORKER) {
 				if (s.locked_by != NULL)
 					evbuffer_add_printf(evb, ", \"locked_by\": [%s]", s.locked_by);
 
