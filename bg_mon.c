@@ -275,7 +275,18 @@ static void prepare_statistics_output(struct evbuffer *evb)
 			if (s.usename != NULL || s.type == PG_BACKEND)
 				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 
-			tmp = s.type == PG_LOGICAL_WORKER ? ps.cmdline : s.query;
+			switch (s.type) {
+				case PG_BG_WORKER:
+					tmp = strcmp(s.query, "\"idle\"") ? s.query : NULL;
+					break;
+				case PG_LOGICAL_WORKER:
+					tmp = ps.cmdline;
+					break;
+				default:
+					tmp = s.query;
+					break;
+			}
+
 			if (tmp != NULL)
 				evbuffer_add_printf(evb, ", \"query\": %s", tmp);
 			evbuffer_add_printf(evb, "}");
@@ -348,6 +359,7 @@ bg_mon_main(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to our database */
+//        sleep(15);
 	BackgroundWorkerInitializeConnection("postgres", NULL
 #if PG_VERSION_NUM >= 110000
 										,0

@@ -79,7 +79,7 @@ static const char * const pg_stat_activity_query =
 	" LEFT JOIN locked_processes USING (pid) "
 	"WHERE pid != pg_backend_pid()"
 #if PG_VERSION_NUM >= 100000
-	" AND backend_type IN ('client backend', 'autovacuum worker', 'walsender', 'background worker')"
+	" AND backend_type NOT IN ('autovacuum launcher', 'background writer', 'checkpointer', 'startup', 'walreceiver', 'walwriter')"
 #endif
 ;
 
