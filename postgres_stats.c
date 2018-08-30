@@ -12,9 +12,12 @@
 #include "pgstat.h"
 #include "utils/guc.h"
 #include "utils/snapmgr.h"
+#include "storage/ipc.h"
 
 #include "system_stats.h"
 #include "postgres_stats.h"
+
+extern bool has_database_connection;
 
 extern system_stat system_stats_old;
 
@@ -552,6 +555,9 @@ static void read_proc_cmdline(pg_stat *stat)
 		const char *rest;
 		PgBackendType type = parse_cmdline(buf, &rest);
 
+		if (!has_database_connection && type == PG_BG_WORKER
+				&& !strncmp(rest, "bg_mon ", 7)) proc_exit(0);
+
 		stat->type = type;
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
 				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest) {
@@ -706,7 +712,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	SPI_finish();
 	PopActiveSnapshot();
 	CommitTransactionCommand();
-	pg_stats->uptime = system_stats_old.uptime;
 
 	if (pg_stats->pos > 0)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
@@ -719,7 +724,9 @@ pg_stat_list get_postgres_stats(void)
 	read_procfs(&proc_stats);
 
 	pg_stat_list_free_resources(&pg_stats_new);
-	get_pg_stat_activity(&pg_stats_new);
+	if (has_database_connection)
+		get_pg_stat_activity(&pg_stats_new);
+	pg_stats_new.uptime = system_stats_old.uptime;
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 
@@ -735,21 +742,23 @@ pg_stat_list get_postgres_stats(void)
 
 void postgres_stats_init(void)
 {
-	SetCurrentStatementStartTimestamp();
-	StartTransactionCommand();
-	SPI_connect();
-	PushActiveSnapshot(GetTransactionSnapshot());
+	if (has_database_connection) {
+		SetCurrentStatementStartTimestamp();
+		StartTransactionCommand();
+		SPI_connect();
+		PushActiveSnapshot(GetTransactionSnapshot());
 
-	pg_stat_activity_query_plan = SPI_prepare(pg_stat_activity_query, 0, NULL);
-	if (pg_stat_activity_query_plan == NULL)
-		elog(FATAL, "pg_stat_activity_query: SPI_prepare returned %d", SPI_result);
+		pg_stat_activity_query_plan = SPI_prepare(pg_stat_activity_query, 0, NULL);
+		if (pg_stat_activity_query_plan == NULL)
+			elog(FATAL, "pg_stat_activity_query: SPI_prepare returned %d", SPI_result);
 
-	if (SPI_keepplan(pg_stat_activity_query_plan))
-		elog(FATAL, "pg_stat_activity_query: SPI_keepplan failed");
+		if (SPI_keepplan(pg_stat_activity_query_plan))
+			elog(FATAL, "pg_stat_activity_query: SPI_keepplan failed");
 
-	SPI_finish();
-	PopActiveSnapshot();
-	CommitTransactionCommand();
+		SPI_finish();
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+	}
 
 	mem_page_size = getpagesize() / 1024;
 	pg_stat_list_init(&pg_stats_current);

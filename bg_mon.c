@@ -53,6 +53,8 @@ static disk_stats disk_stats_current;
 static system_stat system_stats_current;
 static net_stats net_stats_current;
 
+bool has_database_connection = false;
+
 /*
  * Signal handler for SIGTERM
  *		Set a flag to let the main loop to terminate, and set our latch to wake
@@ -338,6 +340,7 @@ static void *webapi(void *arg)
 void
 bg_mon_main(Datum main_arg)
 {
+	int attempts;
 	pthread_t thread;
 	struct timezone tz;
 	struct timeval current_time, next_run;
@@ -345,6 +348,8 @@ bg_mon_main(Datum main_arg)
 	struct event_base *base;
 	struct evhttp *http;
 	struct evhttp_bound_socket *handle;
+
+	has_database_connection = DatumGetBool(main_arg);
 
 	pg_start_time = timestamptz_to_time_t(PgStartTime);
 
@@ -359,16 +364,17 @@ bg_mon_main(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to our database */
-//        sleep(15);
-	BackgroundWorkerInitializeConnection("postgres", NULL
+	if (has_database_connection)
+		BackgroundWorkerInitializeConnection("postgres", NULL
 #if PG_VERSION_NUM >= 110000
-										,0
+											,0
 #endif
-	);
+		);
 	initialize_bg_mon();
 	evthread_use_pthreads();
 
 restart:
+	attempts = 2 * (bg_mon_naptime_guc + 1);
 	FREE(bg_mon_listen_address);
 	if (!(bg_mon_listen_address = palloc(strlen(bg_mon_listen_address_guc) + 1))) {
 		elog(ERROR, "Couldn't allocate memory for bg_mon_listen_address: exiting");
@@ -394,9 +400,13 @@ restart:
 	evhttp_set_gencb(http, send_document_cb, NULL);
 
 	/* Now we tell the evhttp what port to listen on */
-	if (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port))) {
-		elog(ERROR, "couldn't bind to %s:%d. Exiting.", bg_mon_listen_address, bg_mon_port);
-		return proc_exit(1);
+	while (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port))) {
+		/* retry a few times if we have database connection, the old may be still running */
+		if (!has_database_connection || attempts-- < 0) {
+			elog(ERROR, "couldn't bind to %s:%d. Exiting.", bg_mon_listen_address, bg_mon_port);
+			return proc_exit(1);
+		}
+		sleep(1); /* XXX: change to WaitLatch */
 	}
 
 	pthread_mutex_init(&lock, NULL);
@@ -494,7 +504,7 @@ restart:
 void
 _PG_init(void)
 {
-	BackgroundWorker worker;
+	BackgroundWorker worker_start, worker_consistent;
 
 	/* get the configuration */
 	DefineCustomIntVariable("bg_mon.naptime",
@@ -536,26 +546,38 @@ _PG_init(void)
 		return;
 
 	/* set up common data for all our workers */
-	memset(&worker, 0, sizeof(worker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
+	memset(&worker_start, 0, sizeof(worker_start));
+	memset(&worker_consistent, 0, sizeof(worker_consistent));
+	worker_start.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	worker_consistent.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 1;
+	worker_start.bgw_start_time = BgWorkerStart_PostmasterStart;
+	worker_consistent.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker_start.bgw_restart_time = BGW_NEVER_RESTART;
+	worker_consistent.bgw_restart_time = 1;
 #if PG_VERSION_NUM >= 100000
-	sprintf(worker.bgw_library_name, "bg_mon");
-	sprintf(worker.bgw_function_name, "bg_mon_main");
+	sprintf(worker_start.bgw_library_name, "bg_mon");
+	sprintf(worker_consistent.bgw_library_name, "bg_mon");
+	sprintf(worker_start.bgw_function_name, "bg_mon_main");
+	sprintf(worker_consistent.bgw_function_name, "bg_mon_main");
 #else
-	worker.bgw_main = bg_mon_main;
+	worker_start.bgw_main = bg_mon_main;
+	worker_consistent.bgw_main = bg_mon_main;
 #endif
 #if PG_VERSION_NUM >= 90400
-	worker.bgw_notify_pid = 0;
+	worker_start.bgw_notify_pid = 0;
+	worker_consistent.bgw_notify_pid = 0;
 #endif
 
 	/*
 	 * Now fill in worker-specific data, and do the actual registrations.
 	 */
-	snprintf(worker.bgw_name, BGW_MAXLEN, "bg_mon");
-//	worker.bgw_main_arg = Int32GetDatum(i);
+	snprintf(worker_start.bgw_name, BGW_MAXLEN, "bg_mon");
+	worker_start.bgw_main_arg = BoolGetDatum(false);
 
-	RegisterBackgroundWorker(&worker);
+	snprintf(worker_consistent.bgw_name, BGW_MAXLEN, "bg_mon");
+	worker_consistent.bgw_main_arg = BoolGetDatum(true);
+
+	RegisterBackgroundWorker(&worker_start);
+	RegisterBackgroundWorker(&worker_consistent);
 }
