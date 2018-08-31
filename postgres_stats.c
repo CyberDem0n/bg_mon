@@ -556,7 +556,7 @@ static void read_proc_cmdline(pg_stat *stat)
 		PgBackendType type = parse_cmdline(buf, &rest);
 
 		if (!has_database_connection && type == PG_BG_WORKER
-				&& !strncmp(rest, "bg_mon ", 7)) proc_exit(0);
+				&& !strncmp(rest, "bg_mon ", 7)) proc_exit(1);
 
 		stat->type = type;
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
