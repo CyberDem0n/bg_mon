@@ -323,7 +323,7 @@ static proc_io read_proc_io(const char *proc_file)
 	if (iofd == NULL)
 		return pi;
 
-	while (fgets(buf, sizeof(buf), iofd) && i < sizeof(io_tab)/sizeof(struct _io_tab) - 1) {
+	while (fgets(buf, sizeof(buf), iofd) && i < lengthof(io_tab) - 1) {
 		for (j = 0; io_tab[j].name != NULL; ++j)
 			if (strncmp(io_tab[j].name, buf, io_tab[j].name_len) == 0) {
 				++i;

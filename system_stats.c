@@ -96,7 +96,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 	if ((csfd = fopen(memory_cgroup, "r")) == NULL)
 		return cm;
 
-	while (i < sizeof(mem_tab)/sizeof(struct _mem_tab) - 1
+	while (i < lengthof(mem_tab) - 1
 			&& fgets(buf, sizeof(buf), csfd)
 			&& sscanf(buf, "%5s %lu", name, &value) == 2) {
 		for (j = 0; mem_tab[j].name != NULL; ++j) {

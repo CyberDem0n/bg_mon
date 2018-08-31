@@ -221,7 +221,7 @@ static void prepare_statistics_output(struct evbuffer *evb)
 	}
 
 	evbuffer_add_printf(evb, "}}, \"disk_stats\": {");
-	for (i = 0; i < sizeof(ds.values)/sizeof(disk_stat); ++i) {
+	for (i = 0; i < lengthof(ds.values); ++i) {
 		disk_stat device = ds.values[i];
 		if (i > 0) evbuffer_add_printf(evb, ", ");
 		evbuffer_add_printf(evb, "\"%s\": {\"device\": {\"space\": ", device.type);
