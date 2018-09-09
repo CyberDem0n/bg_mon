@@ -827,7 +827,11 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				else
 					ps.idle_in_transaction_age = calculate_age(beentry->st_state_start_timestamp);
 			} else if (ps.state == STATE_RUNNING)
+#if PG_VERSION_NUM >= 110000
+				ps.query = json_escape_string(pgstat_clip_activity(beentry->st_activity_raw));
+#else
 				ps.query = json_escape_string(beentry->st_activity);
+#endif
 
 			if (beentry->st_xact_start_timestamp)
 				ps.age = calculate_age(beentry->st_xact_start_timestamp);
@@ -836,7 +840,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			else ps.age = -1;
 
 #if PG_VERSION_NUM >= 100000
-			ps->type = beentry->st_backendType;
+			ps.type = beentry->st_backendType;
 #else
 			if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
 				ps.type = PG_AUTOVAC_WORKER;

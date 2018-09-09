@@ -379,7 +379,9 @@ bg_mon_main(Datum main_arg)
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
 
-#if PG_VERSION_NUM >= 90500
+#if PG_VERSION_NUM >= 110000
+	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+#elif PG_VERSION_NUM >= 90500
 	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
 #else
 	InitPostgres(NULL, InvalidOid, NULL, NULL);
