@@ -39,7 +39,7 @@ psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(
 sleep 1
 psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
 
-( 
+(
 	if [ $version = "10" ]; then
 		opt="-X none"
 	fi
@@ -59,7 +59,7 @@ sleep 1
 
 echo "bg_mon.port = $(($bport+3))" >> test_cluster0/postgresql.conf
 pg_ctl -D test_cluster0 reload
-
+sleep 1
 curl http://localhost:$(($bport+3))/ui > /dev/null
 ( for a in {1..30}; do curl http://localhost:$(($bport+3)) && echo && sleep 1 && ps auxwwwf | grep postgres; done )&
 
@@ -83,6 +83,6 @@ if [ $version = "10" ]; then
 	pg_ctl -w -D test_cluster2 stop
 fi
 
-rm -fr test_cluster*
+#rm -fr test_cluster*
 
 set +e

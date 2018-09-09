@@ -795,6 +795,14 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 {
 	int			 i, num_backends, num_locks;
 	_lock		*locks;
+	MemoryContext oldcxt, uppercxt = CurrentMemoryContext;
+
+	if (IsNormalProcessingMode())
+	{
+		StartTransactionCommand();
+		(void) GetTransactionSnapshot();
+		oldcxt = MemoryContextSwitchTo(uppercxt);
+	}
 
 	num_backends = pgstat_fetch_stat_numbackends();
 	locks = get_pg_locks(&num_locks);
@@ -869,6 +877,23 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			if (ps->num_blockers > 1)
 				qsort(ps->blocking_pids, ps->num_blockers, sizeof(uint32), cmp_int);
 
+			if ((ps->userid || ps->databaseid) && IsInitProcessingMode())
+			{
+				fprintf(stderr, "foobar\n");
+#if PG_VERSION_NUM >= 110000
+				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+#elif PG_VERSION_NUM >= 90500
+				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+#else
+				InitPostgres(NULL, InvalidOid, NULL, NULL);
+#endif
+				SetProcessingMode(NormalProcessing);
+
+				StartTransactionCommand();
+				(void) GetTransactionSnapshot();
+				oldcxt = MemoryContextSwitchTo(uppercxt);
+			}
+
 			if (ps->userid)
 			{
 				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
@@ -894,23 +919,23 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	}
 
 	pgstat_clear_snapshot();
+
+	if (IsNormalProcessingMode())
+	{
+		MemoryContextSwitchTo(oldcxt);
+		CommitTransactionCommand();
+	}
 }
 
 pg_stat_list get_postgres_stats(void)
 {
-	MemoryContext oldcxt, uppercxt = CurrentMemoryContext;
 	pg_stat_list pg_stats_tmp;
 
 	read_procfs(&proc_stats);
 
 	pg_stat_list_free_resources(&pg_stats_new);
 
-	StartTransactionCommand();
-	(void) GetTransactionSnapshot();
-	oldcxt = MemoryContextSwitchTo(uppercxt);
 	get_pg_stat_activity(&pg_stats_new);
-	MemoryContextSwitchTo(oldcxt);
-	CommitTransactionCommand();
 
 	pg_stats_new.uptime = system_stats_old.uptime;
 
