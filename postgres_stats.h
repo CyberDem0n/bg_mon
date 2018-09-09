@@ -57,11 +57,17 @@ typedef struct {
 
 typedef struct {
 	pid_t pid;
+	Oid	databaseid;
+	Oid	userid;
 	char *datname;
 	char *usename;
-	int32 age;
+	double age;
+	double idle_in_transaction_age;
 	PgBackendType type;
-	char *locked_by;
+	BackendState state;
+	bool is_blocker;
+	uint32 *blocking_pids;
+	uint32 num_blockers;
 	char *query;
 	proc_stat ps;
 } pg_stat;

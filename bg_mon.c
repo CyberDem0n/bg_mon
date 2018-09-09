@@ -53,8 +53,6 @@ static disk_stats disk_stats_current;
 static system_stat system_stats_current;
 static net_stats net_stats_current;
 
-bool has_database_connection = false;
-
 /*
  * Signal handler for SIGTERM
  *		Set a flag to let the main loop to terminate, and set our latch to wake
@@ -176,6 +174,30 @@ static const char *process_type(pg_stat p)
 	}
 }
 
+static const char *get_query(pg_stat s)
+{
+	if (s.type == PG_LOGICAL_WORKER)
+		return s.ps.cmdline;
+
+	switch (s.state)
+	{
+		case STATE_IDLE:
+			return s.type == PG_BG_WORKER ? NULL : "\"idle\"";
+		case STATE_RUNNING:
+			return s.query;
+		case STATE_IDLEINTRANSACTION:
+			return s.idle_in_transaction_age == 0 ? "\"idle in transaction\"" : NULL;
+		case STATE_FASTPATH:
+			return "\"fastpath function call\"";
+		case STATE_IDLEINTRANSACTION_ABORTED:
+			return "\"idle in transaction (aborted)\"";
+		case STATE_DISABLED:
+			return "\"disabled\"";
+		default:
+			return NULL;
+	}
+}
+
 static void prepare_statistics_output(struct evbuffer *evb)
 {
 	bool is_first = true;
@@ -265,11 +287,16 @@ static void prepare_statistics_output(struct evbuffer *evb)
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
 			if (s.type == PG_BACKEND || s.type == PG_AUTOVAC_WORKER) {
-				if (s.locked_by != NULL)
-					evbuffer_add_printf(evb, ", \"locked_by\": [%s]", s.locked_by);
+				if (s.num_blockers > 0) {
+					int j;
+					evbuffer_add_printf(evb, ", \"locked_by\": [%d", s.blocking_pids[0]);
+					for (j = 1; j < s.num_blockers; ++j)
+						evbuffer_add_printf(evb, ",%d", s.blocking_pids[j]);
+					evbuffer_add_printf(evb, "]");
+				}
 
 				if (s.age > -1)
-					evbuffer_add_printf(evb, ", \"age\": %d", s.age);
+					evbuffer_add_printf(evb, ", \"age\": %.3g", s.age);
 			}
 
 			if (s.datname != NULL || s.type == PG_BACKEND)
@@ -277,19 +304,9 @@ static void prepare_statistics_output(struct evbuffer *evb)
 			if (s.usename != NULL || s.type == PG_BACKEND)
 				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 
-			switch (s.type) {
-				case PG_BG_WORKER:
-					tmp = strcmp(s.query, "\"idle\"") ? s.query : NULL;
-					break;
-				case PG_LOGICAL_WORKER:
-					tmp = ps.cmdline;
-					break;
-				default:
-					tmp = s.query;
-					break;
-			}
-
-			if (tmp != NULL)
+			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0)
+				evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %.3g\"", s.idle_in_transaction_age);
+			else if ((tmp = get_query(s)) != NULL)
 				evbuffer_add_printf(evb, ", \"query\": %s", tmp);
 			evbuffer_add_printf(evb, "}");
 		}
@@ -342,7 +359,6 @@ static void *webapi(void *arg)
 void
 bg_mon_main(Datum main_arg)
 {
-	int attempts;
 	pthread_t thread;
 	struct timezone tz;
 	struct timeval current_time, next_run;
@@ -350,8 +366,6 @@ bg_mon_main(Datum main_arg)
 	struct event_base *base;
 	struct evhttp *http;
 	struct evhttp_bound_socket *handle;
-
-	has_database_connection = DatumGetBool(main_arg);
 
 	pg_start_time = timestamptz_to_time_t(PgStartTime);
 
@@ -365,18 +379,12 @@ bg_mon_main(Datum main_arg)
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
 
-	/* Connect to our database */
-	if (has_database_connection)
-		BackgroundWorkerInitializeConnection("postgres", NULL
-#if PG_VERSION_NUM >= 110000
-											,0
-#endif
-		);
+	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+
 	initialize_bg_mon();
 	evthread_use_pthreads();
 
 restart:
-	attempts = 2 * (bg_mon_naptime_guc + 1);
 	FREE(bg_mon_listen_address);
 	if (!(bg_mon_listen_address = palloc(strlen(bg_mon_listen_address_guc) + 1))) {
 		elog(ERROR, "Couldn't allocate memory for bg_mon_listen_address: exiting");
@@ -402,13 +410,9 @@ restart:
 	evhttp_set_gencb(http, send_document_cb, NULL);
 
 	/* Now we tell the evhttp what port to listen on */
-	while (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port))) {
-		/* retry a few times if we have database connection, the old may be still running */
-		if (!has_database_connection || attempts-- < 0) {
-			elog(ERROR, "couldn't bind to %s:%d. Exiting.", bg_mon_listen_address, bg_mon_port);
-			return proc_exit(1);
-		}
-		sleep(1); /* XXX: change to WaitLatch */
+	if (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port))) {
+		elog(ERROR, "couldn't bind to %s:%d. Exiting.", bg_mon_listen_address, bg_mon_port);
+		return proc_exit(1);
 	}
 
 	pthread_mutex_init(&lock, NULL);
@@ -506,7 +510,7 @@ restart:
 void
 _PG_init(void)
 {
-	BackgroundWorker worker_start, worker_consistent;
+	BackgroundWorker worker;
 
 	/* get the configuration */
 	DefineCustomIntVariable("bg_mon.naptime",
@@ -548,38 +552,24 @@ _PG_init(void)
 		return;
 
 	/* set up common data for all our workers */
-	memset(&worker_start, 0, sizeof(worker_start));
-	memset(&worker_consistent, 0, sizeof(worker_consistent));
-	worker_start.bgw_flags = BGWORKER_SHMEM_ACCESS;
-	worker_consistent.bgw_flags = BGWORKER_SHMEM_ACCESS |
-		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker_start.bgw_start_time = BgWorkerStart_PostmasterStart;
-	worker_consistent.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker_start.bgw_restart_time = BGW_NEVER_RESTART;
-	worker_consistent.bgw_restart_time = 1;
+	memset(&worker, 0, sizeof(worker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	worker.bgw_start_time = BgWorkerStart_PostmasterStart;
+	worker.bgw_restart_time = 1;
 #if PG_VERSION_NUM >= 100000
-	sprintf(worker_start.bgw_library_name, "bg_mon");
-	sprintf(worker_consistent.bgw_library_name, "bg_mon");
-	sprintf(worker_start.bgw_function_name, "bg_mon_main");
-	sprintf(worker_consistent.bgw_function_name, "bg_mon_main");
+	sprintf(worker.bgw_library_name, "bg_mon");
+	sprintf(worker.bgw_function_name, "bg_mon_main");
 #else
-	worker_start.bgw_main = bg_mon_main;
-	worker_consistent.bgw_main = bg_mon_main;
+	worker.bgw_main = bg_mon_main;
 #endif
 #if PG_VERSION_NUM >= 90400
-	worker_start.bgw_notify_pid = 0;
-	worker_consistent.bgw_notify_pid = 0;
+	worker.bgw_notify_pid = 0;
 #endif
 
 	/*
 	 * Now fill in worker-specific data, and do the actual registrations.
 	 */
-	snprintf(worker_start.bgw_name, BGW_MAXLEN, "bg_mon");
-	worker_start.bgw_main_arg = BoolGetDatum(false);
+	snprintf(worker.bgw_name, BGW_MAXLEN, "bg_mon");
 
-	snprintf(worker_consistent.bgw_name, BGW_MAXLEN, "bg_mon");
-	worker_consistent.bgw_main_arg = BoolGetDatum(true);
-
-	RegisterBackgroundWorker(&worker_start);
-	RegisterBackgroundWorker(&worker_consistent);
+	RegisterBackgroundWorker(&worker);
 }
