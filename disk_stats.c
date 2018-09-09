@@ -446,6 +446,9 @@ static bool copy_device_stats(device_stats o, device_stats *n)
 {
 	bool ret = false;
 	int i, len = 0;
+
+	n->size = 0;
+
 	for (i = 0; i < o.size; ++i)
 		if (o.values[i].is_used)
 			++len;
@@ -457,8 +460,6 @@ static bool copy_device_stats(device_stats o, device_stats *n)
 	if (len == 0) return true;
 	else if (len > n->len)
 		n->values = repalloc(n->values, (n->len = len)*sizeof(device_stat));
-
-	n->size = 0;
 
 	for (i = 0; i < o.size; ++i)
 		if (o.values[i].is_used) {
