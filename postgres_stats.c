@@ -92,14 +92,8 @@ static _lock *get_pg_locks(int *num_locks)
 	PredicateLockData *predLockData;
 	_lock			  *locks = NULL;
 
-	MemoryContext	   uppercxt = CurrentMemoryContext;
-	MemoryContext	   locksContext = AllocSetContextCreate(uppercxt, "Locks snapshot",
-										ALLOCSET_SMALL_MINSIZE, ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
-
-	MemoryContextSwitchTo(locksContext);
 	lockData = GetLockStatusData();
 	predLockData = GetPredicateLockStatusData();
-	MemoryContextSwitchTo(uppercxt);
 
 	if ((*num_locks = lockData->nelements + predLockData->nelements) > 0)
 	{
@@ -185,7 +179,6 @@ static _lock *get_pg_locks(int *num_locks)
 		if ((*num_locks = j) > 1)
 			qsort(locks, *num_locks, sizeof(_lock), lock_cmp);
 	}
-	MemoryContextDelete(locksContext);
 
 	return locks;
 }
@@ -807,10 +800,15 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 {
 	int			 i, num_backends, num_locks;
 	_lock		*locks;
-	MemoryContext oldcxt, uppercxt = CurrentMemoryContext;
+	MemoryContext othercxt, uppercxt = CurrentMemoryContext;
 
 	num_backends = pgstat_fetch_stat_numbackends();
+
+	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_MINSIZE,
+									ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
+	MemoryContextSwitchTo(othercxt);
 	locks = get_pg_locks(&num_locks);
+	MemoryContextSwitchTo(uppercxt);
 
 	for (i = 1; i <= num_backends; ++i)
 	{
@@ -856,7 +854,14 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 					ps.idle_in_transaction_age = calculate_age(beentry->st_state_start_timestamp);
 			} else if (ps.state == STATE_RUNNING)
 #if PG_VERSION_NUM >= 110000
-				ps.query = *beentry->st_activity_raw ? json_escape_string(pgstat_clip_activity(beentry->st_activity_raw)) : NULL;
+				if (*beentry->st_activity_raw)
+				{
+					char	*query;
+					MemoryContextSwitchTo(othercxt);
+					query = pgstat_clip_activity(beentry->st_activity_raw);
+					MemoryContextSwitchTo(uppercxt);
+					ps.query = json_escape_string(query);
+				}
 #else
 				ps.query = *beentry->st_activity ? json_escape_string(beentry->st_activity) : NULL;
 #endif
@@ -884,10 +889,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 
 	if (num_locks > 0)
-	{
 		enrich_pg_stats(*pg_stats, locks, num_locks);
-		FREE(locks);
-	}
+
+	MemoryContextDelete(othercxt);
 
 	pg_stats->recovery_in_progress = RecoveryInProgress();
 	pg_stats->total_connections = num_backends;
@@ -897,7 +901,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	{
 		StartTransactionCommand();
 		(void) GetTransactionSnapshot();
-		oldcxt = MemoryContextSwitchTo(uppercxt);
+		othercxt = MemoryContextSwitchTo(uppercxt);
 	}
 
 	for (i = 0; i < num_backends; ++i)
@@ -933,7 +937,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	if (IsNormalProcessingMode())
 	{
-		MemoryContextSwitchTo(oldcxt);
+		MemoryContextSwitchTo(othercxt);
 		CommitTransactionCommand();
 	}
 }
