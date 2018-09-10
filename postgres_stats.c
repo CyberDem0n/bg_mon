@@ -18,6 +18,7 @@
 #include "utils/guc.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
 
@@ -717,13 +718,11 @@ static void read_proc_cmdline(pg_stat *stat)
 		stat->type = type;
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
 				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest) {
-#if PG_VERSION_NUM >= 100000
 			if (type == PG_WAL_SENDER && stat->usename) {
 				size_t len = strlen(stat->usename) - 2;
 				if (strncmp(rest, stat->usename + 1, len) == 0 && rest[len] == ' ')
 					rest += len + 1;
 			}
-#endif
 			stat->query = json_escape_string(rest);
 		} else if ((type == PG_LOGICAL_WORKER || type == PG_BG_WORKER) && *rest)
 			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - 3);
@@ -870,8 +869,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 #else
 			if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
 				ps.type = PG_AUTOVAC_WORKER;
-			else
-				ps.type = PG_BACKEND;
+			else ps.type = ps.databaseid == 0 ? ps.type = PG_UNDEFINED : PG_BACKEND;
 #endif
 
 			pg_stat_list_add(pg_stats, ps);

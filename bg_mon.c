@@ -182,7 +182,7 @@ static const char *get_query(pg_stat s)
 	switch (s.state)
 	{
 		case STATE_IDLE:
-			return s.type == PG_BG_WORKER ? NULL : "\"idle\"";
+			return s.type == PG_BG_WORKER ? NULL : s.query ? s.query : "\"idle\"";
 		case STATE_RUNNING:
 			return s.query;
 		case STATE_IDLEINTRANSACTION:
