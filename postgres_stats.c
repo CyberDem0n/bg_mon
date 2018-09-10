@@ -848,7 +848,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			else ps.age = -1;
 
 #if PG_VERSION_NUM >= 100000
-			ps.type = beentry->st_backendType;
+			ps.type = beentry->st_backendType == B_BG_WORKER ? PG_UNDEFINED : beentry->st_backendType;
 #else
 			if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
 				ps.type = PG_AUTOVAC_WORKER;
@@ -877,7 +877,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			if (ps->num_blockers > 1)
 				qsort(ps->blocking_pids, ps->num_blockers, sizeof(uint32), cmp_int);
 
-			if ((ps->userid || ps->databaseid) && IsInitProcessingMode())
+			if (ps->userid && ps->databaseid && IsInitProcessingMode())
 			{
 				fprintf(stderr, "foobar\n");
 #if PG_VERSION_NUM >= 110000
@@ -894,7 +894,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				oldcxt = MemoryContextSwitchTo(uppercxt);
 			}
 
-			if (ps->userid)
+			if (ps->userid && IsNormalProcessingMode())
 			{
 				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
 				if (HeapTupleIsValid(roleTup))
@@ -904,7 +904,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				}
 			}
 
-			if (ps->databaseid)
+			if (ps->databaseid && IsNormalProcessingMode())
 			{
 				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
 				if (HeapTupleIsValid(databaseTup))
