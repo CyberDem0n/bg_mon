@@ -47,11 +47,14 @@ bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
 
 create_cluster 0
 
-psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(30)" &
+echo "create table foo();
+BEGIN ISOLATION LEVEL SERIALIZABLE;
+SELECT * FROM foo;
+select pg_advisory_lock(1), pg_sleep(30)" | psql -h localhost -p $port -d postgres &
 sleep 1
 psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
 sleep 1
-echo -ne "SELECT '\"\\\b'\f\t\r\n, pg_advisory_lock(1), pg_sleep(5)" | psql -h localhost -p $port -d postgres &
+echo -ne "SELECT '\"\\\b\013'\f\t\r\n, pg_advisory_lock(1), pg_sleep(5)" | psql -h localhost -p $port -d postgres &
 
 (
     mkdir test_cluster1
