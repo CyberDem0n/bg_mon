@@ -92,7 +92,9 @@ static _lock *get_pg_locks(int *num_locks)
 	LockData		  *lockData = GetLockStatusData();
 	PredicateLockData *predLockData = GetPredicateLockStatusData();
 
-	*num_locks = lockData->nelements + predLockData->nelements;
+	if ((*num_locks = lockData->nelements + predLockData->nelements) == 0)
+		return NULL;
+
 	locks = palloc0(*num_locks * sizeof(_lock));
 
 	for (i = 0, j = 0; i < lockData->nelements;)
@@ -828,6 +830,22 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			ps.userid = beentry->st_userid;
 			ps.state = beentry->st_state;
 
+			if (ps.userid && ps.databaseid && IsInitProcessingMode())
+			{
+#if PG_VERSION_NUM >= 110000
+				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+#elif PG_VERSION_NUM >= 90500
+				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+#else
+				InitPostgres(NULL, InvalidOid, NULL, NULL);
+#endif
+				SetProcessingMode(NormalProcessing);
+
+				StartTransactionCommand();
+				(void) GetTransactionSnapshot();
+				oldcxt = MemoryContextSwitchTo(uppercxt);
+			}
+
 			if (ps.state == STATE_IDLEINTRANSACTION)
 			{
 				if (beentry->st_xact_start_timestamp == beentry->st_state_start_timestamp)
@@ -836,9 +854,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 					ps.idle_in_transaction_age = calculate_age(beentry->st_state_start_timestamp);
 			} else if (ps.state == STATE_RUNNING)
 #if PG_VERSION_NUM >= 110000
-				ps.query = json_escape_string(pgstat_clip_activity(beentry->st_activity_raw));
+				ps.query = *beentry->st_activity_raw ? json_escape_string(pgstat_clip_activity(beentry->st_activity_raw)) : NULL;
 #else
-				ps.query = json_escape_string(beentry->st_activity);
+				ps.query = *beentry->st_activity ? json_escape_string(beentry->st_activity) : NULL;
 #endif
 
 			if (beentry->st_xact_start_timestamp)
@@ -863,8 +881,11 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	if ((num_backends = pg_stats->pos) > 1)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 
-	enrich_pg_stats(*pg_stats, locks, num_locks);
-	pfree(locks);
+	if (num_locks > 0)
+	{
+		enrich_pg_stats(*pg_stats, locks, num_locks);
+		FREE(locks);
+	}
 
 	pg_stats->recovery_in_progress = RecoveryInProgress();
 	pg_stats->total_connections = num_backends;
@@ -876,23 +897,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
 			if (ps->num_blockers > 1)
 				qsort(ps->blocking_pids, ps->num_blockers, sizeof(uint32), cmp_int);
-
-			if (ps->userid && ps->databaseid && IsInitProcessingMode())
-			{
-				fprintf(stderr, "foobar\n");
-#if PG_VERSION_NUM >= 110000
-				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
-#elif PG_VERSION_NUM >= 90500
-				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
-#else
-				InitPostgres(NULL, InvalidOid, NULL, NULL);
-#endif
-				SetProcessingMode(NormalProcessing);
-
-				StartTransactionCommand();
-				(void) GetTransactionSnapshot();
-				oldcxt = MemoryContextSwitchTo(uppercxt);
-			}
 
 			if (ps->userid && IsNormalProcessingMode())
 			{

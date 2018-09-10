@@ -50,6 +50,7 @@ create_cluster 0
 psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(30)" &
 sleep 1
 psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
+echo -ne "SELECT '\"\\\b'\f\t\r\n, pg_advisory_lock(1), pg_sleep(5)" | psql -h localhost -p $port -d postgres
 
 (
     mkdir test_cluster1
