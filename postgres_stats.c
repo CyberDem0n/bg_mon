@@ -16,6 +16,7 @@
 #include "pgstat.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
@@ -87,94 +88,104 @@ static int lock_cmp(const void *arg1, const void *arg2)
 
 static _lock *get_pg_locks(int *num_locks)
 {
-	int				   i, j;
-	_lock			  *locks;
+	LockData		  *lockData;
+	PredicateLockData *predLockData;
+	_lock			  *locks = NULL;
 
-	LockData		  *lockData = GetLockStatusData();
-	PredicateLockData *predLockData = GetPredicateLockStatusData();
+	MemoryContext	   uppercxt = CurrentMemoryContext;
+	MemoryContext	   locksContext = AllocSetContextCreate(uppercxt, "Locks snapshot",
+										ALLOCSET_SMALL_MINSIZE, ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
 
-	if ((*num_locks = lockData->nelements + predLockData->nelements) == 0)
-		return NULL;
+	MemoryContextSwitchTo(locksContext);
+	lockData = GetLockStatusData();
+	predLockData = GetPredicateLockStatusData();
+	MemoryContextSwitchTo(uppercxt);
 
-	locks = palloc0(*num_locks * sizeof(_lock));
-
-	for (i = 0, j = 0; i < lockData->nelements;)
+	if ((*num_locks = lockData->nelements + predLockData->nelements) > 0)
 	{
-		_lock			 *l;
-		LockInstanceData *instance = &(lockData->locks[i]);
-		LOCKMODE		  mode = 0;
-		bool			  granted = false;
+		int		i, j = 0;
 
-		if (instance->holdMask)
-			for (mode = 0; mode < MAX_LOCKMODES; mode++)
-				if (instance->holdMask & LOCKBIT_ON(mode))
-				{
-					granted = true;
-					instance->holdMask &= LOCKBIT_OFF(mode);
-					break;
-				}
+		locks = palloc0(*num_locks * sizeof(_lock));
 
-		if (!granted)
+		for (i = 0; i < lockData->nelements;)
 		{
-			i++;
-			if (instance->waitLockMode != NoLock)
-				mode = instance->waitLockMode;
-			else
-				continue;
-		}
+			_lock			 *l;
+			LockInstanceData *instance = &(lockData->locks[i]);
+			LOCKMODE		  mode = 0;
+			bool			  granted = false;
+
+			if (instance->holdMask)
+				for (mode = 0; mode < MAX_LOCKMODES; mode++)
+					if (instance->holdMask & LOCKBIT_ON(mode))
+					{
+						granted = true;
+						instance->holdMask &= LOCKBIT_OFF(mode);
+						break;
+					}
+
+			if (!granted)
+			{
+				i++;
+				if (instance->waitLockMode != NoLock)
+					mode = instance->waitLockMode;
+				else
+					continue;
+			}
 #if PG_VERSION_NUM >= 90600
-		else continue;
+			else continue;
 #endif
 
-		l = locks + j++;
-		l->granted = granted;
-		l->pid = instance->pid;
-		l->type = instance->locktag.locktag_type;
+			l = locks + j++;
+			l->granted = granted;
+			l->pid = instance->pid;
+			l->type = instance->locktag.locktag_type;
 
-		switch ((LockTagType) l->type)
-		{
-			default:
-			case LOCKTAG_OBJECT:
-			case LOCKTAG_USERLOCK:
-			case LOCKTAG_TUPLE:
-				l->field4 = instance->locktag.locktag_field4;
-			case LOCKTAG_PAGE:
-				l->field3 = instance->locktag.locktag_field3;
-			case LOCKTAG_RELATION:
-			case LOCKTAG_RELATION_EXTEND:
-			case LOCKTAG_VIRTUALTRANSACTION:
-				l->field2 = instance->locktag.locktag_field2;
-			case LOCKTAG_TRANSACTION:
-				l->field1 = instance->locktag.locktag_field1;
+			switch ((LockTagType) l->type)
+			{
+				default:
+				case LOCKTAG_OBJECT:
+				case LOCKTAG_USERLOCK:
+				case LOCKTAG_TUPLE:
+					l->field4 = instance->locktag.locktag_field4;
+				case LOCKTAG_PAGE:
+					l->field3 = instance->locktag.locktag_field3;
+				case LOCKTAG_RELATION:
+				case LOCKTAG_RELATION_EXTEND:
+				case LOCKTAG_VIRTUALTRANSACTION:
+					l->field2 = instance->locktag.locktag_field2;
+				case LOCKTAG_TRANSACTION:
+					l->field1 = instance->locktag.locktag_field1;
+			}
 		}
-	}
 
 #if PG_VERSION_NUM < 90600
-	for (i = 0; i < predLockData->nelements; ++i)
-	{
-		PREDICATELOCKTARGETTAG *predTag = &(predLockData->locktags[i]);
-		PredicateLockTargetType	lockType = GET_PREDICATELOCKTARGETTAG_TYPE(*predTag);
-		_lock				   *l = locks + j++;
-
-		l->granted = true;
-		l->pid = predLockData->xacts[i].pid;
-		l->type = lockType == PREDLOCKTAG_RELATION ? lockType : lockType + 1;
-
-		switch (lockType)
+		for (i = 0; i < predLockData->nelements; ++i)
 		{
-			case PREDLOCKTAG_TUPLE:
-				l->field4 = GET_PREDICATELOCKTARGETTAG_OFFSET(*predTag);
-			case PREDLOCKTAG_PAGE:
-				l->field3 = GET_PREDICATELOCKTARGETTAG_PAGE(*predTag);
-			default:
-				l->field2 = GET_PREDICATELOCKTARGETTAG_RELATION(*predTag);
-				l->field1 = GET_PREDICATELOCKTARGETTAG_DB(*predTag);
+			PREDICATELOCKTARGETTAG *predTag = &(predLockData->locktags[i]);
+			PredicateLockTargetType	lockType = GET_PREDICATELOCKTARGETTAG_TYPE(*predTag);
+			_lock				   *l = locks + j++;
+
+			l->granted = true;
+			l->pid = predLockData->xacts[i].pid;
+			l->type = lockType == PREDLOCKTAG_RELATION ? lockType : lockType + 1;
+
+			switch (lockType)
+			{
+				case PREDLOCKTAG_TUPLE:
+					l->field4 = GET_PREDICATELOCKTARGETTAG_OFFSET(*predTag);
+				case PREDLOCKTAG_PAGE:
+					l->field3 = GET_PREDICATELOCKTARGETTAG_PAGE(*predTag);
+				default:
+					l->field2 = GET_PREDICATELOCKTARGETTAG_RELATION(*predTag);
+					l->field1 = GET_PREDICATELOCKTARGETTAG_DB(*predTag);
+			}
 		}
-	}
 #endif
 
-	if ((*num_locks = j) > 1)
-		qsort(locks, *num_locks, sizeof(_lock), lock_cmp);
+		if ((*num_locks = j) > 1)
+			qsort(locks, *num_locks, sizeof(_lock), lock_cmp);
+	}
+	MemoryContextDelete(locksContext);
 
 	return locks;
 }
@@ -798,13 +809,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	_lock		*locks;
 	MemoryContext oldcxt, uppercxt = CurrentMemoryContext;
 
-	if (IsNormalProcessingMode())
-	{
-		StartTransactionCommand();
-		(void) GetTransactionSnapshot();
-		oldcxt = MemoryContextSwitchTo(uppercxt);
-	}
-
 	num_backends = pgstat_fetch_stat_numbackends();
 	locks = get_pg_locks(&num_locks);
 
@@ -829,6 +833,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			ps.userid = beentry->st_userid;
 			ps.state = beentry->st_state;
 
+			/* it is proven experimetally that it is safe to run InitPostgres only when we
+			 * got some other backends connected which already initialized system caches.
+			 * In such case there will be entries with valid databaseid and userid. */
 			if (ps.userid && ps.databaseid && IsInitProcessingMode())
 			{
 #if PG_VERSION_NUM >= 110000
@@ -839,10 +846,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				InitPostgres(NULL, InvalidOid, NULL, NULL);
 #endif
 				SetProcessingMode(NormalProcessing);
-
-				StartTransactionCommand();
-				(void) GetTransactionSnapshot();
-				oldcxt = MemoryContextSwitchTo(uppercxt);
 			}
 
 			if (ps.state == STATE_IDLEINTRANSACTION)
@@ -871,10 +874,11 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				ps.type = PG_AUTOVAC_WORKER;
 			else ps.type = ps.databaseid == 0 ? ps.type = PG_UNDEFINED : PG_BACKEND;
 #endif
-
 			pg_stat_list_add(pg_stats, ps);
 		}
 	}
+
+	pgstat_clear_snapshot();
 
 	if ((num_backends = pg_stats->pos) > 1)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
@@ -888,6 +892,13 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	pg_stats->recovery_in_progress = RecoveryInProgress();
 	pg_stats->total_connections = num_backends;
 	pg_stats->active_connections = 0;
+
+	if (IsNormalProcessingMode())
+	{
+		StartTransactionCommand();
+		(void) GetTransactionSnapshot();
+		oldcxt = MemoryContextSwitchTo(uppercxt);
+	}
 
 	for (i = 0; i < num_backends; ++i)
 	{
@@ -919,8 +930,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			pg_stats->active_connections++;
 		}
 	}
-
-	pgstat_clear_snapshot();
 
 	if (IsNormalProcessingMode())
 	{
