@@ -821,7 +821,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				&& beentry->st_backendType != B_WAL_RECEIVER
 				&& beentry->st_backendType != B_WAL_WRITER
 #endif
-				)
+				&& beentry->st_procpid != MyProcPid)
 		{
 			pg_stat ps = {0, };
 

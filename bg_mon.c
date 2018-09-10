@@ -275,7 +275,7 @@ static void prepare_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, "}, \"processes\": [");
 	for (i = 0; i < pg_stats_current.pos; ++i) {
 		pg_stat s = pg_stats_current.values[i];
-		if (s.type != PG_BACKEND || s.query != NULL) {
+		if (s.type != PG_BACKEND || s.query != NULL || s.is_blocker) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
 			const char *tmp = process_type(s);
