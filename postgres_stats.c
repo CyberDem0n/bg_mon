@@ -798,6 +798,7 @@ static double calculate_age(TimestampTz ts)
 
 static void get_pg_stat_activity(pg_stat_list *pg_stats)
 {
+	bool		 init_postgres = false;
 	int			 i, num_backends, num_locks;
 	_lock		*locks;
 	MemoryContext othercxt, uppercxt = CurrentMemoryContext;
@@ -839,16 +840,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			 * got some other backends connected which already initialized system caches.
 			 * In such case there will be entries with valid databaseid and userid. */
 			if (ps.userid && ps.databaseid && IsInitProcessingMode())
-			{
-#if PG_VERSION_NUM >= 110000
-				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
-#elif PG_VERSION_NUM >= 90500
-				InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
-#else
-				InitPostgres(NULL, InvalidOid, NULL, NULL);
-#endif
-				SetProcessingMode(NormalProcessing);
-			}
+				init_postgres = true;
 
 			if (ps.state == STATE_IDLEINTRANSACTION)
 			{
@@ -888,6 +880,18 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	}
 
 	pgstat_clear_snapshot();
+
+	if (init_postgres)
+	{
+#if PG_VERSION_NUM >= 110000
+		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+#elif PG_VERSION_NUM >= 90500
+		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+#else
+		InitPostgres(NULL, InvalidOid, NULL, NULL);
+#endif
+		SetProcessingMode(NormalProcessing);
+	}
 
 	if ((num_backends = pg_stats->pos) > 1)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
