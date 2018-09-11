@@ -47,9 +47,10 @@ bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
 
 create_cluster 0
 
-echo "create table foo();
-BEGIN ISOLATION LEVEL SERIALIZABLE;
-SELECT * FROM foo;
+echo "create table foo(id int not null primary key);
+INSERT INTO foo values(1);
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+SELECT * FROM foo WHERE id = 1;
 select pg_advisory_lock(1), pg_sleep(30)" | psql -h localhost -p $port -d postgres &
 sleep 1
 psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)" &
