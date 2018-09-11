@@ -13,7 +13,7 @@ function shutdown_clusters() {
     set +e
     pg_ctl -w -D test_cluster0 stop -mf
     pg_ctl -w -D test_cluster1 stop -mf
-    if [ $version = "10" ]; then
+    if [[ $version =~ ^[1-9][0-9]$ ]]; then
         pg_ctl -w -D test_cluster2 stop -mf
     fi
 }
@@ -60,7 +60,7 @@ echo -ne "SELECT '\"\\\b\013'\f\t\r\n, pg_advisory_lock(1), pg_sleep(5)" | psql 
 (
     mkdir test_cluster1
     chmod 700 test_cluster1
-    if [ $version = "10" ]; then opt="-X none"; fi
+    if [[ $version =~ ^[1-9][0-9]$ ]]; then opt="-X none"; fi
     time pg_basebackup $opt -R -c fast -h localhost -p $port -F t -D - | pv -qL 3M | tar -C test_cluster1 -x
     echo "bg_mon.port = $(($bport+1))" >> test_cluster1/postgresql.conf
     pg_ctl -w -D test_cluster1 start -o "--port=$(($port+1))"
@@ -75,7 +75,7 @@ pg_ctl -D test_cluster0 reload
 curl http://localhost:$(($bport+3))/ui > /dev/null
 ( for a in {1..30}; do curl http://localhost:$(($bport+3)) && echo && sleep 1 && ps auxwwwf | grep postgres; done )&
 
-if [ $version = "10" ]; then
+if [[ $version =~ ^[1-9][0-9]$ ]]; then
     create_cluster 2
 
     ( for a in {1..30}; do curl http://localhost:$(($bport+2)) && sleep 1; done )&

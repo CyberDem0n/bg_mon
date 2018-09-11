@@ -804,8 +804,12 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	num_backends = pgstat_fetch_stat_numbackends();
 
+#if PG_VERSION_NUM >= 90600
+	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_SIZES);
+#else
 	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_MINSIZE,
 									ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
+#endif
 	MemoryContextSwitchTo(othercxt);
 	locks = get_pg_locks(&num_locks);
 	MemoryContextSwitchTo(uppercxt);
