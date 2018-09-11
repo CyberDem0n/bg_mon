@@ -222,7 +222,7 @@ static void update_blockers(pg_stat_list pg_stats, pg_stat *blocked, int blocker
 	}
 }
 
-static void enrich_pg_stats(pg_stat_list pg_stats, _lock *locks, int num_locks)
+static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock *locks, int num_locks)
 {
 	int	i, j;
 
@@ -249,12 +249,16 @@ static void enrich_pg_stats(pg_stat_list pg_stats, _lock *locks, int num_locks)
 		}
 #else
 		{
-			int		   num_blockers;
-			Datum	  *blockers;
+			int			  num_blockers;
+			Datum		 *blockers;
+			ArrayType	 *elems;
+			MemoryContext uppercxt = CurrentMemoryContext;
 
-			ArrayType *elems = DatumGetArrayTypeP(DirectFunctionCall1(pg_blocking_pids, Int32GetDatum(l.pid)));
-
+			MemoryContextSwitchTo(othercxt);
+			elems = DatumGetArrayTypeP(DirectFunctionCall1(pg_blocking_pids, Int32GetDatum(l.pid)));
 			deconstruct_array(elems, INT4OID, sizeof(int32), true, 'i', &blockers, NULL, &num_blockers);
+			MemoryContextSwitchTo(uppercxt);
+
 			for (j = 0; j < num_blockers; ++j)
 				update_blockers(pg_stats, blocked, DatumGetInt32(blockers[j]));
 		}
@@ -897,7 +901,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 
 	if (num_locks > 0)
-		enrich_pg_stats(*pg_stats, locks, num_locks);
+		enrich_pg_stats(othercxt, *pg_stats, locks, num_locks);
 
 	MemoryContextDelete(othercxt);
 
@@ -909,7 +913,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	{
 		StartTransactionCommand();
 		(void) GetTransactionSnapshot();
-		othercxt = MemoryContextSwitchTo(uppercxt);
 	}
 
 	for (i = 0; i < num_backends; ++i)
@@ -924,7 +927,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
 				if (HeapTupleIsValid(roleTup))
 				{
+					othercxt = MemoryContextSwitchTo(uppercxt);
 					ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
+					MemoryContextSwitchTo(othercxt);
 					ReleaseSysCache(roleTup);
 				}
 			}
@@ -934,7 +939,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
 				if (HeapTupleIsValid(databaseTup))
 				{
+					othercxt = MemoryContextSwitchTo(uppercxt);
 					ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
+					MemoryContextSwitchTo(othercxt);
 					ReleaseSysCache(databaseTup);
 				}
 			}
@@ -944,10 +951,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	}
 
 	if (IsNormalProcessingMode())
-	{
-		MemoryContextSwitchTo(othercxt);
 		CommitTransactionCommand();
-	}
 }
 
 pg_stat_list get_postgres_stats(void)
