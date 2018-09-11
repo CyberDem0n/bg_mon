@@ -29,7 +29,7 @@ trap shutdown_clusters QUIT TERM INT
 
 function start_postgres() {
     postgres -D test_cluster$1 --port=$(($port+$1)) &
-    while ! pg_isready -h localhost -p $(($port+$1)); do
+    while ! pg_isready -h localhost -p $(($port+$1)) -d postgres; do
         sleep 1
     done
 }
