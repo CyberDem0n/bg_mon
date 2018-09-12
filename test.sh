@@ -82,7 +82,7 @@ function clone_cluster() {
 
 create_cluster 0
 
-run_bg psql -h localhost -p $port -d postgres -v "create table foo(id int not null primary key); INSERT INTO foo values(1); BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; SELECT * FROM foo WHERE id = 1; select pg_advisory_lock(1), pg_sleep(30);"
+run_bg psql -h localhost -p $port -d postgres -c "create table foo(id int not null primary key); INSERT INTO foo values(1); BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; SELECT * FROM foo WHERE id = 1; select pg_advisory_lock(1), pg_sleep(30);"
 sleep 1
 run_bg psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)"
 sleep 1
