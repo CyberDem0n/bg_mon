@@ -82,16 +82,12 @@ function clone_cluster() {
 
 create_cluster 0
 
-echo "create table foo(id int not null primary key);
-INSERT INTO foo values(1);
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SELECT * FROM foo WHERE id = 1;
-select pg_advisory_lock(1), pg_sleep(30)" | run_bg psql -h localhost -p $port -d postgres
+run_bg psql -h localhost -p $port -d postgres -v "create table foo(id int not null primary key); INSERT INTO foo values(1); BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; SELECT * FROM foo WHERE id = 1; select pg_advisory_lock(1), pg_sleep(30);"
 sleep 1
 run_bg psql -h localhost -p $port -d postgres -c "select pg_advisory_lock(1), pg_sleep(5)"
 sleep 1
-echo -ne "SELECT '\"\\\b\013'\f\t\r\n, pg_advisory_lock(1), pg_sleep(5)" | run_bg psql -h localhost -p $port -d postgres
-
+echo -ne "SELECT '\"\\\b\013'\f\t\r\n, pg_advisory_lock(1), pg_sleep(5)" | psql -h localhost -p $port -d postgres &
+background_pids+=($!)
 run_bg clone_cluster 1
 
 sleep 1
