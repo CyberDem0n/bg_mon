@@ -93,7 +93,7 @@ static _lock *get_pg_locks(int *num_locks)
 #if PG_VERSION_NUM < 90600
 	PredicateLockData	*predLockData = GetPredicateLockStatusData();
 
-	*num_locks = lockData->nelements + predLockData->nelement;
+	*num_locks = lockData->nelements + predLockData->nelements;
 #else
 	*num_locks = lockData->nelements;
 #endif
