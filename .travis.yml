@@ -25,6 +25,7 @@ before_install:
   - sudo pip install --upgrade cpp-coveralls
 script:
   - |
+    set -e
     sudo make USE_PGXS=1 ENABLE_GCOV=1 install
     bash test.sh
     if grep -E '(ERROR|FATAL)' test_cluster?/*log/postgresql*.log | grep -Ev '(no COPY in progress|could not connect to|could not send|database system is shutting|database system is starting up)'; then exit 1; fi

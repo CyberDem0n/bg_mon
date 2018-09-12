@@ -29,8 +29,9 @@ trap shutdown_clusters QUIT TERM INT
 
 function start_postgres() {
     postgres -D test_cluster$1 --port=$(($port+$1)) &
+    max_attempts=0
     while ! pg_isready -h localhost -p $(($port+$1)) -d postgres; do
-        sleep 1
+        [[ $((max_attempts++)) -lt 10 ]] && sleep 1 || exit 1
     done
 }
 
@@ -98,6 +99,7 @@ sleep 1
 echo "bg_mon.port = $(($bport+3))" >> test_cluster0/postgresql.conf
 pg_ctl -D test_cluster0 reload
 
+max_attempts=0
 while ! curl http://localhost:$(($bport+3))/ui > /dev/null; do
     [[ $((max_attempts++)) -lt 5 ]] && sleep 1 || exit 1
 done
