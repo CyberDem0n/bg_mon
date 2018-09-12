@@ -283,11 +283,13 @@ static char *json_escape_string(const char *s)
 
 static unsigned long long get_memory_usage(const char *proc_file)
 {
+	ssize_t n;
 	char *p, *endptr, buf[255];
 	unsigned long resident = 0, share = 0;
-	FILE *fd = fopen(proc_file, "r");
-	if (fd == NULL) return 0;
-	if (fgets(buf, sizeof(buf), fd)) {
+	int fd = open(proc_file, O_RDONLY);
+	if (fd < 0) return 0;
+	if ((n = read(fd, buf, sizeof(buf) - 1)) > 0) {
+		buf[n] = '\0';
 		for (p = buf; *p != ' ' && *p != '\0'; ++p);
 		if (*p == ' ') {
 			resident = strtoul(p + 1, &endptr, 10);
@@ -295,7 +297,7 @@ static unsigned long long get_memory_usage(const char *proc_file)
 				share = strtoul(endptr + 1, NULL, 10);
 		}
 	}
-	fclose(fd);
+	close(fd);
 	return (unsigned long long)(resident - share) * mem_page_size;
 }
 
@@ -338,14 +340,16 @@ static proc_io read_proc_io(const char *proc_file)
 
 static proc_stat read_proc_stat(const char *proc_file)
 {
+	ssize_t n;
 	char *t, buf[512];
 	proc_stat ps = {0,};
-	FILE *statfd = fopen(proc_file, "r");
+	int statfd = open(proc_file, O_RDONLY);
 
-	if (statfd == NULL)
+	if (statfd < 0)
 		return ps;
 
-	if (fgets(buf, sizeof(buf), statfd)) {
+	if ((n = read(statfd, buf, sizeof(buf) - 1)) > 0) {
+		buf[n] = '\0';
 		for (t = buf; *t != ')' && *t != '\0'; ++t);
 		if (*t == ')' && strncmp(t + 3, postmaster_pid, postmaster_pid_len) == 0) {
 			ps.fields = sscanf(t + 2, "%c %d %*d %*d %*d %*d %*u %*u %*u \
@@ -360,7 +364,7 @@ static proc_stat read_proc_stat(const char *proc_file)
 		}
 	}
 
-	fclose(statfd);
+	close(statfd);
 	return ps;
 }
 
