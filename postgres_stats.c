@@ -88,14 +88,18 @@ static int lock_cmp(const void *arg1, const void *arg2)
 
 static _lock *get_pg_locks(int *num_locks)
 {
-	LockData		  *lockData;
-	PredicateLockData *predLockData;
-	_lock			  *locks = NULL;
+	_lock				*locks = NULL;
+	LockData			*lockData = GetLockStatusData();
+#if PG_VERSION_NUM < 90600
+	PredicateLockData	*predLockData = GetPredicateLockStatusData();
 
-	lockData = GetLockStatusData();
-	predLockData = GetPredicateLockStatusData();
+	*num_locks = lockData->nelements + predLockData->nelement;
+#else
+	*num_locks = lockData->nelements;
+#endif
 
-	if ((*num_locks = lockData->nelements + predLockData->nelements) > 0)
+
+	if (*num_locks > 0)
 	{
 		int		i, j = 0;
 
