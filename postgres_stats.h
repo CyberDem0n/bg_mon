@@ -22,6 +22,22 @@ typedef enum PgBackendType
 	PG_LOGICAL_WORKER
 } PgBackendType;
 
+#define UNKNOWN_PROC_NAME "???"
+#define AUTOVAC_LAUNCHER_PROC_NAME "autovacuum launcher"
+#define AUTOVAC_WORKER_PROC_NAME "autovacuum worker"
+#define BACKEND_PROC_NAME "backend"
+#define BG_WRITER_NAME "bgwriter"
+#define CHECKPOINTER_PROC_NAME "checkpointer"
+#define STARTUP_PROC_NAME "startup"
+#define WAL_RECEIVER_NAME "walreceiver"
+#define WAL_SENDER_NAME "walsender"
+#define WAL_WRITER_NAME "walwriter"
+#define ARCHIVER_PROC_NAME "archiver"
+#define LOGGER_PROC_NAME "logger"
+#define STATS_COLLECTOR_PROC_NAME "stats collector"
+#define LOGICAL_LAUNCHER_NAME "logical replication launcher"
+#define LOGICAL_WORKER_NAME "logical replication worker"
+
 typedef struct {
 	bool available;
 	unsigned long long read_bytes;

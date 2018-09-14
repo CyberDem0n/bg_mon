@@ -53,6 +53,8 @@ static disk_stats disk_stats_current;
 static system_stat system_stats_current;
 static net_stats net_stats_current;
 
+#define QUOTE(STRING) "\"" STRING "\""
+
 /*
  * Signal handler for SIGTERM
  *		Set a flag to let the main loop to terminate, and set our latch to wake
@@ -136,42 +138,31 @@ static void device_io_output(struct evbuffer *evb, device_stat *stats, int id)
 
 static const char *process_type(pg_stat p)
 {
-	switch (p.type) {
-		case PG_UNKNOWN:
-			return "\"???\"";
-		case PG_AUTOVAC_LAUNCHER:
-			return "\"autovacuum launcher\"";
-		case PG_AUTOVAC_WORKER:
-			return "\"autovacuum worker\"";
-		case PG_BACKEND:
-			return "\"backend\"";
-		case PG_BG_WORKER:
-			return p.ps.cmdline;
-		case PG_BG_WRITER:
-			return "\"bgwriter\"";
-		case PG_CHECKPOINTER:
-			return "\"checkpointer\"";
-		case PG_STARTUP:
-			return "\"startup\"";
-		case PG_WAL_RECEIVER:
-			return "\"walreceiver\"";
-		case PG_WAL_SENDER:
-			return "\"walsender\"";
-		case PG_WAL_WRITER:
-			return "\"walwriter\"";
-		case PG_ARCHIVER:
-			return "\"archiver\"";
-		case PG_LOGGER:
-			return "\"logger\"";
-		case PG_STATS_COLLECTOR:
-			return "\"stats collector\"";
-		case PG_LOGICAL_LAUNCHER:
-			return "\"logical replication launcher\"";
-		case PG_LOGICAL_WORKER:
-			return "\"logical replication worker\"";
-		default:
-			return NULL;
-	}
+
+	char *backend_names[] = {
+		NULL,
+		QUOTE(UNKNOWN_PROC_NAME),
+		QUOTE(AUTOVAC_LAUNCHER_PROC_NAME),
+		QUOTE(AUTOVAC_WORKER_PROC_NAME),
+		QUOTE(BACKEND_PROC_NAME),
+		NULL,
+		QUOTE(BG_WRITER_NAME),
+		QUOTE(CHECKPOINTER_PROC_NAME),
+		QUOTE(STARTUP_PROC_NAME),
+		QUOTE(WAL_RECEIVER_NAME),
+		QUOTE(WAL_SENDER_NAME),
+		QUOTE(WAL_WRITER_NAME),
+		QUOTE(ARCHIVER_PROC_NAME),
+		QUOTE(LOGGER_PROC_NAME),
+		QUOTE(STATS_COLLECTOR_PROC_NAME),
+		QUOTE(LOGICAL_LAUNCHER_NAME),
+		QUOTE(LOGICAL_WORKER_NAME)
+	};
+
+	if (p.type == PG_BG_WORKER)
+		return p.ps.cmdline;
+
+	return backend_names[p.type + 2];
 }
 
 static const char *get_query(pg_stat s)
@@ -182,17 +173,17 @@ static const char *get_query(pg_stat s)
 	switch (s.state)
 	{
 		case STATE_IDLE:
-			return s.type == PG_BG_WORKER ? NULL : s.query ? s.query : "\"idle\"";
+			return s.type == PG_BG_WORKER ? NULL : s.query ? s.query : QUOTE("idle");
 		case STATE_RUNNING:
 			return s.query;
 		case STATE_IDLEINTRANSACTION:
-			return s.idle_in_transaction_age == 0 ? "\"idle in transaction\"" : NULL;
+			return s.idle_in_transaction_age == 0 ? QUOTE("idle in transaction") : NULL;
 		case STATE_FASTPATH:
-			return "\"fastpath function call\"";
+			return QUOTE("fastpath function call");
 		case STATE_IDLEINTRANSACTION_ABORTED:
-			return "\"idle in transaction (aborted)\"";
+			return QUOTE("idle in transaction (aborted)");
 		case STATE_DISABLED:
-			return "\"disabled\"";
+			return QUOTE("disabled");
 		default:
 			return NULL;
 	}

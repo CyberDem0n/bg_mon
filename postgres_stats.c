@@ -478,6 +478,9 @@ static unsigned long long get_memory_usage(const char *proc_file)
 	return (unsigned long long)(resident - share) * mem_page_size;
 }
 
+#define TAB_ENTRY(STRING, TARGET) {STRING, sizeof(STRING), TARGET}
+#define IO_TAB(NAME) TAB_ENTRY(#NAME ": ", &pi.NAME)
+
 static proc_io read_proc_io(const char *proc_file)
 {
 	int i = 0, j = 0;
@@ -488,9 +491,9 @@ static proc_io read_proc_io(const char *proc_file)
 		size_t name_len;
 		unsigned long long *value;
 	} io_tab[] = {
-		{"read_bytes: ", 12, &pi.read_bytes},
-		{"write_bytes: ", 13, &pi.write_bytes},
-		{"cancelled_write_bytes: ", 23, &pi.cancelled_write_bytes},
+		IO_TAB(read_bytes),
+		IO_TAB(write_bytes),
+		IO_TAB(cancelled_write_bytes),
 		{NULL, 0, NULL}
 	};
 
@@ -645,6 +648,33 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
+#define LOGICAL_LAUNCHER_PROC_NAME LOGICAL_LAUNCHER_NAME "  "
+#define LOGICAL_WORKER_PROC_NAME LOGICAL_WORKER_NAME " for"
+
+#define BACKEND_ENTRY(CMDLINE_PATTERN, TYPE) TAB_ENTRY(CMDLINE_PATTERN " ", PG_##TYPE)
+
+#define CMDLINE(TYPE) TYPE##_PROC_NAME
+#define OTH_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE(TYPE), TYPE)
+#if PG_VERSION_NUM < 110000
+	#define WAL_RECEIVER_PROC_NAME "wal receiver"
+	#define WAL_SENDER_PROC_NAME "wal sender"
+	#define WAL_WRITER_PROC_NAME "wal writer"
+	#define BG_WRITER_PROC_NAME "writer"
+	#define BG_WORKER_PROC_NAME "bgworker:"
+
+	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE) " process"
+	#define BGWORKER(TYPE) BACKEND_ENTRY(CMDLINE(BG_WORKER) " " CMDLINE(TYPE), TYPE)
+#else
+	#define WAL_RECEIVER_PROC_NAME WAL_RECEIVER_NAME
+	#define WAL_SENDER_PROC_NAME WAL_SENDER_NAME
+	#define WAL_WRITER_PROC_NAME WAL_WRITER_NAME
+	#define BG_WRITER_PROC_NAME "background writer"
+
+	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE)
+	#define BGWORKER(TYPE) OTH_BACKEND(TYPE)
+#endif
+#define AUX_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE_PATTERN(TYPE) "  ", TYPE)
+
 static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 {
 	PgBackendType type = PG_UNDEFINED;
@@ -657,39 +687,24 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			size_t name_len;
 			PgBackendType type;
 		} backend_tab[] = {
+			AUX_BACKEND(ARCHIVER),
+			AUX_BACKEND(STARTUP),
+			AUX_BACKEND(WAL_RECEIVER),
+			BACKEND_ENTRY(CMDLINE_PATTERN(WAL_SENDER), WAL_SENDER),
+			AUX_BACKEND(AUTOVAC_LAUNCHER),
+			AUX_BACKEND(AUTOVAC_WORKER),
+			BGWORKER(LOGICAL_LAUNCHER),
+			BGWORKER(LOGICAL_WORKER),
 #if PG_VERSION_NUM < 110000
-			{"archiver process   ", 19, PG_ARCHIVER},
-			{"startup process   ", 18, PG_STARTUP},
-			{"wal receiver process   ", 23, PG_WAL_RECEIVER},
-			{"wal sender process ", 19, PG_WAL_SENDER},
-			{"autovacuum launcher process   ", 30, PG_AUTOVAC_LAUNCHER},
-			{"autovacuum worker process   ", 28, PG_AUTOVAC_WORKER},
-			{"bgworker: logical replication launcher   ", 41, PG_LOGICAL_LAUNCHER},
-			{"bgworker: logical replication worker for ", 41, PG_LOGICAL_WORKER},
-			{"bgworker: ", 10, PG_BG_WORKER},
-			{"checkpointer process   ", 23, PG_CHECKPOINTER},
-			{"logger process   ", 17, PG_LOGGER},
-			{"stats collector process   ", 26, PG_STATS_COLLECTOR},
-			{"wal writer process   ", 21, PG_WAL_WRITER},
-			{"writer process   ", 17, PG_BG_WRITER},
-#else
-			{"archiver   ", 11, PG_ARCHIVER},
-			{"startup   ", 10, PG_STARTUP},
-			{"walreceiver   ", 14, PG_WAL_RECEIVER},
-			{"walsender ", 10, PG_WAL_SENDER},
-			{"autovacuum launcher   ", 22, PG_AUTOVAC_LAUNCHER},
-			{"autovacuum worker   ", 20, PG_AUTOVAC_WORKER},
-			{"logical replication launcher   ", 31, PG_LOGICAL_LAUNCHER},
-			{"logical replication worker for ", 31, PG_LOGICAL_WORKER},
-			{"background writer   ", 20, PG_BG_WRITER},
-			{"checkpointer   ", 15, PG_CHECKPOINTER},
-			{"logger   ", 9, PG_LOGGER},
-			{"stats collector   ", 18, PG_STATS_COLLECTOR},
-			{"walwriter   ", 12, PG_WAL_WRITER},
-
+			OTH_BACKEND(BG_WORKER),
 #endif
-			{"??? process   ", 14, PG_UNKNOWN},
-			{NULL, 0, 0}
+			AUX_BACKEND(CHECKPOINTER),
+			AUX_BACKEND(LOGGER),
+			AUX_BACKEND(STATS_COLLECTOR),
+			AUX_BACKEND(WAL_WRITER),
+			AUX_BACKEND(BG_WRITER),
+			OTH_BACKEND(UNKNOWN),
+			{NULL, 0, PG_UNDEFINED}
 		};
 
 		for (j = 0; backend_tab[j].name != NULL; ++j)
