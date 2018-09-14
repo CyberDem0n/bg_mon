@@ -1,8 +1,6 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
-#include "postgres.h"
-
 #include "system_stats.h"
 
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
