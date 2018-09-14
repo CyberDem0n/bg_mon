@@ -908,18 +908,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	pgstat_clear_snapshot();
 
-	if (init_postgres)
-	{
-#if PG_VERSION_NUM >= 110000
-		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
-#elif PG_VERSION_NUM >= 90500
-		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
-#else
-		InitPostgres(NULL, InvalidOid, NULL, NULL);
-#endif
-		SetProcessingMode(NormalProcessing);
-	}
-
 	if ((num_backends = pg_stats->pos) > 1)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 
@@ -931,6 +919,18 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	pg_stats->recovery_in_progress = RecoveryInProgress();
 	pg_stats->total_connections = num_backends;
 	pg_stats->active_connections = 0;
+
+	if (init_postgres)
+	{
+#if PG_VERSION_NUM >= 110000
+		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+#elif PG_VERSION_NUM >= 90500
+		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+#else
+		InitPostgres(NULL, InvalidOid, NULL, NULL);
+#endif
+		SetProcessingMode(NormalProcessing);
+	}
 
 	if (IsNormalProcessingMode())
 	{
