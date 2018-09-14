@@ -10,6 +10,7 @@
 #include "postgres.h"
 
 #include "tcop/utility.h"
+#include "access/xlog_internal.h"
 
 #include "system_stats.h"
 #include "disk_stats.h"
@@ -27,11 +28,6 @@ typedef struct {
 	bool me_remote;
 } mount_entry;
 
-#if PG_VERSION_NUM >= 100000
-static const char pg_wal[] = "pg_wal";
-#else
-static const char pg_wal[] = "pg_xlog";
-#endif
 extern char *DataDir;
 static char *wal_directory;
 static char *data_dev;
@@ -83,7 +79,7 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 				|| (e->d_name[1] && (e->d_name[1] != '.' || e->d_name[2])))
 				&& strcmp(e->d_name, "lost+found") != 0) {
 
-			if (wal && !strncmp(e->d_name, pg_wal, sizeof(pg_wal))) {
+			if (wal && !strncmp(e->d_name, XLOGDIR, sizeof(XLOGDIR))) {
 				*wal = du(dirfd, e->d_name, 0, NULL);
 				if (fstatat(dirfd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
 					if ((st.st_mode & S_IFMT) == S_IFDIR)
@@ -535,11 +531,11 @@ void disk_stats_init(void)
 	pthread_t thread;
 	List *mounts = read_mounts();
 	size_t len = strlen(DataDir);
-	wal_directory = palloc(len + sizeof(pg_wal) + 2);
+	wal_directory = palloc(len + sizeof(XLOGDIR) + 2);
 	strcpy(wal_directory, DataDir);
 	if (wal_directory[len - 1] != '/')
 		wal_directory[len++] = '/';
-	strcpy(wal_directory + len, pg_wal);
+	strcpy(wal_directory + len, XLOGDIR);
 
 	data_dev = get_device(mounts, DataDir);
 	if (data_dev) data_dev = pstrdup(data_dev);
