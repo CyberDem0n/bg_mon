@@ -478,7 +478,7 @@ static unsigned long long get_memory_usage(const char *proc_file)
 	return (unsigned long long)(resident - share) * mem_page_size;
 }
 
-#define TAB_ENTRY(STRING, TARGET) {STRING, sizeof(STRING), TARGET}
+#define TAB_ENTRY(STRING, TARGET) {STRING, sizeof(STRING) - 1, TARGET}
 #define IO_TAB(NAME) TAB_ENTRY(#NAME ": ", &pi.NAME)
 
 static proc_io read_proc_io(const char *proc_file)
