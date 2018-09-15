@@ -49,14 +49,20 @@ static pg_stat_list pg_stats_new;
 
 typedef struct {
 	uint32		pid;
+#if PG_VERSION_NUM < 90600
 	uint32		field1; /* a 32-bit ID field */
 	uint32		field2; /* a 32-bit ID field */
 	uint32		field3; /* a 32-bit ID field */
 	uint16		field4; /* a 16-bit ID field */
 	uint8		type;	/* see enum LockTagType */
 	bool		granted;
+#endif
 } _lock;
 
+#if PG_VERSION_NUM >= 90600
+#define IS_GRANTED(l) false
+#else
+#define IS_GRANTED(l) l.granted
 static int lock_cmp(const void *arg1, const void *arg2)
 {
 	const _lock *l1 = (const _lock *) arg1;
@@ -85,6 +91,7 @@ static int lock_cmp(const void *arg1, const void *arg2)
 
 	return 0;
 }
+#endif
 
 static _lock *get_pg_locks(int *num_locks)
 {
@@ -134,8 +141,9 @@ static _lock *get_pg_locks(int *num_locks)
 #endif
 
 			l = locks + j++;
-			l->granted = granted;
 			l->pid = instance->pid;
+#if PG_VERSION_NUM < 90600
+			l->granted = granted;
 			l->type = instance->locktag.locktag_type;
 
 			switch ((LockTagType) l->type)
@@ -154,6 +162,7 @@ static _lock *get_pg_locks(int *num_locks)
 				case LOCKTAG_TRANSACTION:
 					l->field1 = instance->locktag.locktag_field1;
 			}
+#endif
 		}
 
 #if PG_VERSION_NUM < 90600
@@ -178,12 +187,10 @@ static _lock *get_pg_locks(int *num_locks)
 					l->field1 = GET_PREDICATELOCKTARGETTAG_DB(*predTag);
 			}
 		}
-#endif
-
 		if ((*num_locks = j) > 1)
 			qsort(locks, *num_locks, sizeof(_lock), lock_cmp);
+#endif
 	}
-
 	return locks;
 }
 
@@ -235,7 +242,7 @@ static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock
 		pg_stat		*blocked;
 		_lock		 l = locks[i];
 
-		if (l.granted || !(blocked = find_pg_proc_by_pid(pg_stats, l.pid)))
+		if (IS_GRANTED(l) || !(blocked = find_pg_proc_by_pid(pg_stats, l.pid)))
 			continue;
 
 #if PG_VERSION_NUM < 90600
@@ -246,7 +253,7 @@ static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock
 			if (l.type != m.type || l.field1 != m.field1 || l.field2 != m.field2
 					|| l.field3 != m.field3 || l.field4 != m.field4) break;
 
-			if (!m.granted) continue;
+			if (!IS_GRANTED(m)) continue;
 
 			if (l.pid != m.pid)
 				update_blockers(pg_stats, blocked, m.pid);
