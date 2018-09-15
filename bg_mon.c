@@ -54,6 +54,9 @@ static system_stat system_stats_current;
 static net_stats net_stats_current;
 
 #define QUOTE(STRING) "\"" STRING "\""
+#if PG_VERSION_NUM < 90500
+#define MyLatch &MyProc->procLatch
+#endif
 
 /*
  * Signal handler for SIGTERM
@@ -66,12 +69,10 @@ bg_mon_sigterm(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	got_sigterm = true;
-#if PG_VERSION_NUM >= 100000
-	SetLatch(MyLatch);
-#else
+#if PG_VERSION_NUM < 90500
 	if (MyProc)
-		SetLatch(&MyProc->procLatch);
 #endif
+	SetLatch(MyLatch);
 	errno = save_errno;
 }
 
@@ -86,12 +87,10 @@ bg_mon_sighup(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	got_sighup = true;
-#if PG_VERSION_NUM >= 100000
-	SetLatch(MyLatch);
-#else
+#if PG_VERSION_NUM < 90500
 	if (MyProc)
-		SetLatch(&MyProc->procLatch);
 #endif
+	SetLatch(MyLatch);
 	errno = save_errno;
 }
 
@@ -433,15 +432,12 @@ restart:
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 						   naptime,
 						   PG_WAIT_EXTENSION);
-
-			ResetLatch(MyLatch);
 #else
-			int rc = WaitLatch(&MyProc->procLatch,
+			int rc = WaitLatch(MyLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 						   naptime);
-
-			ResetLatch(&MyProc->procLatch);
 #endif
+			ResetLatch(MyLatch);
 			/* emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 				proc_exit(1);
