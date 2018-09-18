@@ -24,6 +24,9 @@
 #include "postgres_stats.h"
 #include "disk_stats.h"
 #include "system_stats.h"
+#ifdef HAS_LIBBROTLI
+#include "brotli_utils.h"
+#endif
 
 PG_MODULE_MAGIC;
 
@@ -48,10 +51,30 @@ static char *bg_mon_listen_address = NULL;
 static int bg_mon_port_guc = 8080;
 static int bg_mon_port = 8080;
 
-static pg_stat_list pg_stats_current;
-static disk_stats disk_stats_current;
-static system_stat system_stats_current;
-static net_stats net_stats_current;
+static struct evbuffer *evbuffer = NULL;
+#ifdef HAS_LIBBROTLI
+static pthread_mutex_t agg_lock;
+static struct aggregated_stats {
+	time_t minute;
+	struct compression_state state;
+} aggregated[20] = {0,};
+static const int num_buckets = sizeof(aggregated)/sizeof(struct aggregated_stats);
+static time_t prev_minute = 0;
+
+static bool accept_brotli(const struct evkeyvalq *input_headers)
+{
+	const char *accept_encoding = evhttp_find_header(input_headers, "Accept-Encoding");
+	if (accept_encoding) {
+		size_t len = strlen(accept_encoding);
+		const char *p;
+		if (len > 1 && (p = strcasestr(accept_encoding, "br"))) {
+			return (p == accept_encoding || *(p - 1) == ',' || *(p - 1) == ' ')
+				&& (p + 2 == accept_encoding + len || *(p + 2) == ',' || *(p + 2) == ' ' || *(p + 2) == ',');
+		}
+	}
+	return false;
+}
+#endif
 
 #define QUOTE(STRING) "\"" STRING "\""
 #if PG_VERSION_NUM < 90500
@@ -94,10 +117,6 @@ bg_mon_sighup(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-/*
- * Initialize workspace for a worker process: create the schema if it doesn't
- * already exist.
- */
 static void
 initialize_bg_mon()
 {
@@ -188,31 +207,24 @@ static const char *get_query(pg_stat s)
 	}
 }
 
-static void prepare_statistics_output(struct evbuffer *evb)
+static struct evbuffer *prepare_statistics_output(struct timeval time, system_stat s, pg_stat_list p, disk_stats ds, net_stats ns)
 {
+	struct evbuffer *evb = evbuffer_new();
+	unsigned long long ts = (unsigned long long)time.tv_sec*1000 + (unsigned long long)((double)time.tv_usec/1000.0);
+
+	cpu_stat c = s.cpu;
+	meminfo m = s.mem;
+	load_avg la = s.load_avg;
+
 	bool is_first = true;
 	size_t i;
-	disk_stats ds;
-	system_stat s;
-	net_stats ns;
-	cpu_stat c;
-	meminfo m;
-	load_avg la;
 
-	pthread_mutex_lock(&lock);
-	ds = disk_stats_current;
-	s = system_stats_current;
-	ns = net_stats_current;
-	c = s.cpu;
-	m = s.mem;
-	la = s.load_avg;
-
-	evbuffer_add_printf(evb, "{\"hostname\": \"%s\", \"sysname\": \"Linux: %s\", ", s.hostname, s.sysname);
+	evbuffer_add_printf(evb, "{\"hostname\": \"%s\", \"time\": %llu, \"sysname\": \"Linux: %s\", ", s.hostname, ts, s.sysname);
 	evbuffer_add_printf(evb, "\"cpu_cores\": %d, \"postgresql\": {\"version\": \"%s\"", c.cpu_count, PG_VERSION);
-	evbuffer_add_printf(evb, ", \"role\": \"%s\", ", pg_stats_current.recovery_in_progress?"replica":"master");
+	evbuffer_add_printf(evb, ", \"role\": \"%s\", ", p.recovery_in_progress?"replica":"master");
 	evbuffer_add_printf(evb, "\"data_directory\": \"%s\", \"connections\": {\"max\": %d", DataDir, MaxConnections);
-	evbuffer_add_printf(evb, ", \"total\": %d, ", pg_stats_current.total_connections);
-	evbuffer_add_printf(evb, "\"active\": %d}, \"start_time\": %lu}, ", pg_stats_current.active_connections, pg_start_time);
+	evbuffer_add_printf(evb, ", \"total\": %d, ", p.total_connections);
+	evbuffer_add_printf(evb, "\"active\": %d}, \"start_time\": %lu}, ", p.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", (int)(s.uptime / SC_CLK_TCK));
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g], \"cpu\": ", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "{\"user\": %2.1f, \"system\": %2.1f, \"idle\": ", c.utime_diff, c.stime_diff);
@@ -263,8 +275,8 @@ static void prepare_statistics_output(struct evbuffer *evb)
 
 	is_first = true;
 	evbuffer_add_printf(evb, "}, \"processes\": [");
-	for (i = 0; i < pg_stats_current.pos; ++i) {
-		pg_stat s = pg_stats_current.values[i];
+	for (i = 0; i < p.pos; ++i) {
+		pg_stat s = p.values[i];
 		if (s.type != PG_BACKEND || s.query != NULL || s.is_blocker) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
@@ -303,8 +315,7 @@ static void prepare_statistics_output(struct evbuffer *evb)
 	}
 
 	evbuffer_add_printf(evb, "]}");
-
-	pthread_mutex_unlock(&lock);
+	return evb;
 }
 
 static void send_document_cb(struct evhttp_request *req, void *arg)
@@ -312,29 +323,69 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	bool err = false;
 
 	const char *uri = evhttp_request_get_uri(req);
-
-	struct evbuffer *evb = evbuffer_new();
-
+	struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
+#ifdef HAS_LIBBROTLI
+	const struct evkeyvalq *input_headers = evhttp_request_get_input_headers(req);
+	if (strlen(uri) == 3 && uri[0] == '/' && uri[1] >= '0' && uri[1] <= '9' && uri[2] >= '0' && uri[2] <= '9') {
+		int bucket = 10 * (uri[1] - '0') + uri[2] - '0';
+		if (bucket >=0 && bucket < num_buckets) {
+			struct aggregated_stats *agg = aggregated + bucket;
+			if ((time(NULL) - agg->minute)/60 <= num_buckets) {
+				struct evbuffer *evb = evbuffer_new();
+				pthread_mutex_lock(&agg_lock);
+				if (!agg->state.is_flushed && !agg->state.is_finished)
+					brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
+				evbuffer_add(evb, agg->state.to, agg->state.pos);
+				pthread_mutex_unlock(&agg_lock);
+				evhttp_add_header(output_headers, "Content-Type", "application/json");
+				evhttp_add_header(output_headers, "Content-Encoding", "br");
+				evhttp_send_reply(req, 200, "OK", evb);
+				evbuffer_free(evb);
+			} else err = true;
+		} else err = true;
+	} else
+#endif
 	if (strncmp(uri, "/ui", 3)) {
-		if (!(err = system_stats_current.uptime == 0)) {
-			prepare_statistics_output(evb);
-			evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "application/json");
-		}
+		pthread_mutex_lock(&lock);
+		if (evbuffer) {
+			struct evbuffer *evb = evbuffer_new();
+#if HAS_LIBBROTLI
+			if (accept_brotli(input_headers)) {
+				struct compression_state *state = malloc(sizeof(struct compression_state));
+				state->to = NULL;
+				state->len = 0;
+				brotli_init(state, 7);
+				brotli_compress_evbuffer(state, evbuffer, BROTLI_OPERATION_FINISH);
+				evbuffer_add_reference(evb, state->to, state->pos, brotli_cleanup, state);
+				evhttp_add_header(output_headers, "Content-Encoding", "br");
+			} else
+#endif
+			{
+				struct evbuffer_iovec v_out[1];
+				evbuffer_reserve_space(evb, evbuffer_get_length(evbuffer), v_out, 1);
+				v_out[0].iov_len = evbuffer_copyout(evbuffer, v_out[0].iov_base, v_out[0].iov_len);
+				evbuffer_commit_space(evb, v_out, 1);
+			}
+			evhttp_add_header(output_headers, "Content-Type", "application/json");
+			evhttp_send_reply(req, 200, "OK", evb);
+			evbuffer_free(evb);
+		} else err = true;
+		pthread_mutex_unlock(&lock);
 	} else {
 		int fd = open(UIFILE, O_RDONLY);
 		if (!(err = (fd < 0))) {
 			struct stat st;
 			if (!(err = (fstat(fd, &st) < 0))) {
-				evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "text/html");
+				struct evbuffer *evb = evbuffer_new();
+				evhttp_add_header(output_headers, "Content-Type", "text/html");
 				evbuffer_add_file(evb, fd, 0, st.st_size);
+				evhttp_send_reply(req, 200, "OK", evb);
+				evbuffer_free(evb);
 			} else close(fd);
 		}
 	}
 
 	if (err) evhttp_send_error(req, 404, "Document was not found");
-	else evhttp_send_reply(req, 200, "OK", evb);
-
-	evbuffer_free(evb);
 }
 
 static void *webapi(void *arg)
@@ -344,6 +395,59 @@ static void *webapi(void *arg)
 	event_base_dispatch(base);
 
 	return (void *)0;
+}
+
+static void update_aggregated_statistics(time_t time)
+{
+#ifdef HAS_LIBBROTLI
+	struct tm *tm = gmtime(&time);
+	time_t minute = time - tm->tm_sec;
+	struct aggregated_stats *agg;
+
+	if (prev_minute == 0)
+		prev_minute = minute - (tm->tm_sec == 0 ? 60 : 0);
+
+	agg = aggregated + (prev_minute/60) % num_buckets;
+
+	pthread_mutex_lock(&agg_lock);
+	if (agg->minute != prev_minute) {
+		if (agg->minute)
+			brotli_dealloc(&agg->state);
+		brotli_init(&agg->state, 7);
+		brotli_compress_data(&agg->state, (const unsigned char *)"[", 1, BROTLI_OPERATION_PROCESS);
+		agg->minute = prev_minute;
+	} else
+		brotli_compress_data(&agg->state, (const unsigned char *)",", 1, BROTLI_OPERATION_PROCESS);
+
+	brotli_compress_evbuffer(&agg->state, evbuffer, BROTLI_OPERATION_PROCESS);
+
+	if (prev_minute != minute)
+		brotli_compress_data(&agg->state, (const unsigned char *)"]", 1, BROTLI_OPERATION_FINISH);
+	pthread_mutex_unlock(&agg_lock);
+
+	prev_minute = minute;
+#endif
+}
+
+static void update_statistics(struct timeval time)
+{
+	system_stat s = get_system_stats();
+	pg_stat_list p = get_postgres_stats();
+	disk_stats d =  get_disk_stats();
+	net_stats n = get_net_stats();
+
+	struct evbuffer *evb = prepare_statistics_output(time, s, p, d, n);
+
+	pthread_mutex_lock(&lock);
+
+	if (evbuffer != NULL)
+		evbuffer_free(evbuffer);
+
+	evbuffer = evb;
+
+	pthread_mutex_unlock(&lock);
+
+	update_aggregated_statistics(time.tv_sec);
 }
 
 void
@@ -404,6 +508,9 @@ restart:
 	}
 
 	pthread_mutex_init(&lock, NULL);
+#ifdef HAS_LIBBROTLI
+	pthread_mutex_init(&agg_lock, NULL);
+#endif
 
 	pthread_create(&thread, NULL, webapi, base);
 
@@ -459,6 +566,9 @@ restart:
 				pthread_join(thread, NULL);
 
 				pthread_mutex_destroy(&lock);
+#ifdef HAS_LIBBROTLI
+				pthread_mutex_destroy(&agg_lock);
+#endif
 
 				evhttp_free(http);
 				event_base_free(base);
@@ -466,21 +576,7 @@ restart:
 			}
 		}
 
-		{
-			system_stat s = get_system_stats();
-			pg_stat_list p = get_postgres_stats();
-			disk_stats d = get_disk_stats();
-			net_stats n = get_net_stats();
-
-			pthread_mutex_lock(&lock);
-
-			system_stats_current = s;
-			pg_stats_current = p;
-			disk_stats_current = d;
-			net_stats_current = n;
-
-			pthread_mutex_unlock(&lock);
-		}
+		update_statistics(next_run);
 	}
 
 	proc_exit(1);

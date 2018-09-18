@@ -213,8 +213,12 @@ function loadJSON(path, success, error) {
 	xhr.onreadystatechange = function() {
 		if (xhr.readyState === XMLHttpRequest.DONE) {
 			if (xhr.status === 200) {
-				if (success)
-					success(JSON.parse(xhr.responseText));
+				if (success) {
+					data = xhr.responseText;
+					if (data.startsWith('[') && !endsWith(data, ']'))
+						data += ']';
+					success(JSON.parse(data));
+				}
 			} else {
 				if (error)
 					error(xhr);
@@ -348,8 +352,9 @@ function set_diskstats_values(data, type) {
 		data['io'][type + '_' + attrs[i]] = t['io'][attrs[i]];
 }
 
-function apply(data, ns) {
+function apply(data, ns, t, only_charts) {
 	if (ns == '') {
+		t = data['time'];
 		data['io'] = {};
 		set_diskstats_values(data, 'data')
 		if (data['io']['data_dev'] == data['disk_stats']['wal']['device']['name']) {
@@ -362,12 +367,12 @@ function apply(data, ns) {
 	for (var key in data) {
 		var ns_key = ns + key;
 		var el = document.getElementById(ns_key);
-		if (el != null)
-			el.innerHTML = getValue(data[key], ns_key);
-		else if (typeof(data[key]) == 'object') {
+		if (el != null) {
+			if (!only_charts)
+				el.innerHTML = getValue(data[key], ns_key);
+		} else if (typeof(data[key]) == 'object') {
 			var cn = ns_key + '.chart';
 			if (cn in timeSeries) {
-				var t = new Date().getTime();
 				if (ns_key == 'system_stats.cpu')
 					data[key]['total'] = 100 - data[key]['idle'];
 				else if (ns_key == 'system_stats.memory') {
@@ -379,7 +384,7 @@ function apply(data, ns) {
 				for (var n in timeSeries[cn])
 					timeSeries[cn][n].append(t, data[key][n]);
 			}
-			apply(data[key], ns_key + '.');
+			apply(data[key], ns_key + '.', t, only_charts);
 		}
 	}
 }
@@ -408,8 +413,17 @@ function body_loaded() {
 		pause = !pause;
 	});
 
+	for (var i = 0; i < 20; ++i) {
+		if (i < 10) i = "0" + i;
+		loadJSON('/' + i, function(data) {
+			for (var key in data) {
+				apply(data[key], '', 0, true);
+			}
+		});
+	}
+
 	setInterval(function() {
-		loadJSON('/', function(data) {apply(data, '')}, alert);
+		loadJSON('/', function(data) {apply(data, '', 0, false)}, alert);
 	}, 1000);
 }
 
