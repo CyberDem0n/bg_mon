@@ -5,13 +5,23 @@
 
 #include "miscadmin.h"
 
+#include "access/htup_details.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "executor/spi.h"
+#include "catalog/pg_authid.h"
+#include "catalog/pg_database.h"
+#include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
 #include "pgstat.h"
+#include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
+#include "utils/timestamp.h"
+#include "storage/ipc.h"
+#include "storage/predicate_internals.h"
 
 #include "system_stats.h"
 #include "postgres_stats.h"
@@ -26,62 +36,6 @@ static char *cmdline_prefix;
 static size_t postmaster_pid_len;
 static char postmaster_pid[32];
 static unsigned long long mem_page_size;
-static SPIPlanPtr pg_stat_activity_query_plan;
-static const char * const pg_stat_activity_query =
-"WITH locked_processes AS ("
-	"SELECT this.pid as pid, "
-#if PG_VERSION_NUM >= 90600
-			"ARRAY(SELECT unnest(pg_blocking_pids(this.pid)) ORDER BY 1) AS locked_by"
-#else
-			"array_agg(DISTINCT other.pid ORDER BY other.pid) AS locked_by"
-#endif
-	" FROM pg_locks this"
-#if PG_VERSION_NUM < 90600
-	" JOIN pg_locks other ON this.locktype = other.locktype "
-						"AND this.database IS NOT DISTINCT FROM other.database "
-						"AND this.relation IS NOT DISTINCT FROM other.relation "
-						"AND this.page IS NOT DISTINCT FROM other.page "
-						"AND this.tuple IS NOT DISTINCT FROM other.tuple "
-						"AND this.virtualxid IS NOT DISTINCT FROM other.virtualxid "
-						"AND this.transactionid IS NOT DISTINCT FROM other.transactionid "
-						"AND this.classid IS NOT DISTINCT FROM other.classid "
-						"AND this.objid IS NOT DISTINCT FROM other.objid "
-						"AND this.objsubid IS NOT DISTINCT FROM other.objsubid "
-						"AND this.pid != other.pid "
-						"AND other.granted"
-#endif
-	" WHERE NOT this.granted"
-#if PG_VERSION_NUM < 90600
-	" GROUP BY 1"
-#endif
-"), lockers AS ("
-	"SELECT DISTINCT unnest(locked_by)"
-	" FROM locked_processes"
-") SELECT pid,"
-		" datname::text,"
-		" usename::text,"
-		" round(extract(epoch from (now() - COALESCE(xact_start, CASE WHEN state = 'active'"
-																	" THEN query_start"
-																	" ELSE NULL END))))::int AS age,"
-		" NULLIF(array_to_string(locked_by, ','), ''),"
-		" CASE WHEN state = 'idle in transaction' THEN"
-				" CASE WHEN xact_start != state_change THEN"
-					" 'idle in transaction ' || CAST("
-						" abs(round(extract(epoch from (now() - state_change)))) AS text)"
-				" ELSE state END"
-		" WHEN state = 'active' THEN query"
-		" ELSE state END::text AS query,"
-		" pid IN (SELECT * FROM lockers)"
-#if PG_VERSION_NUM >= 100000
-		", CASE backend_type WHEN 'autovacuum worker' THEN 1 WHEN 'walsender' THEN 8 WHEN 'client backend' THEN 2 ELSE -2 END"
-#endif
-	" FROM pg_stat_activity a"
-	" LEFT JOIN locked_processes USING (pid) "
-	"WHERE pid != pg_backend_pid()"
-#if PG_VERSION_NUM >= 100000
-	" AND backend_type NOT IN ('autovacuum launcher', 'background writer', 'checkpointer', 'startup', 'walreceiver', 'walwriter')"
-#endif
-;
 
 typedef struct {
 	proc_stat *values;
@@ -92,6 +46,237 @@ typedef struct {
 static proc_stat_list proc_stats;
 static pg_stat_list pg_stats_current;
 static pg_stat_list pg_stats_new;
+
+typedef struct {
+	uint32		pid;
+#if PG_VERSION_NUM < 90600
+	uint32		field1; /* a 32-bit ID field */
+	uint32		field2; /* a 32-bit ID field */
+	uint32		field3; /* a 32-bit ID field */
+	uint16		field4; /* a 16-bit ID field */
+	uint8		type;	/* see enum LockTagType */
+	bool		granted;
+#endif
+} _lock;
+
+#if PG_VERSION_NUM >= 90600
+#define IS_GRANTED(l) false
+#else
+#define IS_GRANTED(l) l.granted
+static int lock_cmp(const void *arg1, const void *arg2)
+{
+	const _lock *l1 = (const _lock *) arg1;
+	const _lock *l2 = (const _lock *) arg2;
+
+	if (l1->type > l2->type) return 1;
+	if (l1->type < l2->type) return -1;
+
+	if (l1->field1 > l2->field1) return 1;
+	if (l1->field1 < l2->field1) return -1;
+
+	if (l1->field2 > l2->field2) return 1;
+	if (l1->field2 < l2->field2) return -1;
+
+	if (l1->field3 > l2->field3) return 1;
+	if (l1->field3 < l2->field3) return -1;
+
+	if (l1->field4 > l2->field4) return 1;
+	if (l1->field4 < l2->field4) return -1;
+
+	if (l1->granted > l2->granted) return 1;
+	if (l1->granted < l2->granted) return -1;
+
+	if (l1->pid > l2->pid) return 1;
+	if (l1->pid < l2->pid) return -1;
+
+	return 0;
+}
+#endif
+
+static _lock *get_pg_locks(int *num_locks)
+{
+	_lock				*locks = NULL;
+	LockData			*lockData = GetLockStatusData();
+#if PG_VERSION_NUM < 90600
+	PredicateLockData	*predLockData = GetPredicateLockStatusData();
+
+	*num_locks = lockData->nelements + predLockData->nelements;
+#else
+	*num_locks = lockData->nelements;
+#endif
+
+
+	if (*num_locks > 0)
+	{
+		int		i, j = 0;
+
+		locks = palloc0(*num_locks * sizeof(_lock));
+
+		for (i = 0; i < lockData->nelements;)
+		{
+			_lock			 *l;
+			LockInstanceData *instance = &(lockData->locks[i]);
+			LOCKMODE		  mode = 0;
+			bool			  granted = false;
+
+			if (instance->holdMask)
+				for (mode = 0; mode < MAX_LOCKMODES; mode++)
+					if (instance->holdMask & LOCKBIT_ON(mode))
+					{
+						granted = true;
+						instance->holdMask &= LOCKBIT_OFF(mode);
+						break;
+					}
+
+			if (!granted)
+			{
+				i++;
+				if (instance->waitLockMode != NoLock)
+					mode = instance->waitLockMode;
+				else
+					continue;
+			}
+#if PG_VERSION_NUM >= 90600
+			else continue;
+#endif
+
+			l = locks + j++;
+			l->pid = instance->pid;
+#if PG_VERSION_NUM < 90600
+			l->granted = granted;
+			l->type = instance->locktag.locktag_type;
+
+			switch ((LockTagType) l->type)
+			{
+				default:
+				case LOCKTAG_OBJECT:
+				case LOCKTAG_USERLOCK:
+				case LOCKTAG_TUPLE:
+					l->field4 = instance->locktag.locktag_field4;
+				case LOCKTAG_PAGE:
+					l->field3 = instance->locktag.locktag_field3;
+				case LOCKTAG_RELATION:
+				case LOCKTAG_RELATION_EXTEND:
+				case LOCKTAG_VIRTUALTRANSACTION:
+					l->field2 = instance->locktag.locktag_field2;
+				case LOCKTAG_TRANSACTION:
+					l->field1 = instance->locktag.locktag_field1;
+			}
+#endif
+		}
+
+#if PG_VERSION_NUM < 90600
+		for (i = 0; i < predLockData->nelements; ++i)
+		{
+			PREDICATELOCKTARGETTAG *predTag = &(predLockData->locktags[i]);
+			PredicateLockTargetType	lockType = GET_PREDICATELOCKTARGETTAG_TYPE(*predTag);
+			_lock				   *l = locks + j++;
+
+			l->granted = true;
+			l->pid = predLockData->xacts[i].pid;
+			l->type = lockType == PREDLOCKTAG_RELATION ? lockType : lockType + 1;
+
+			switch (lockType)
+			{
+				case PREDLOCKTAG_TUPLE:
+					l->field4 = GET_PREDICATELOCKTARGETTAG_OFFSET(*predTag);
+				case PREDLOCKTAG_PAGE:
+					l->field3 = GET_PREDICATELOCKTARGETTAG_PAGE(*predTag);
+				default:
+					l->field2 = GET_PREDICATELOCKTARGETTAG_RELATION(*predTag);
+					l->field1 = GET_PREDICATELOCKTARGETTAG_DB(*predTag);
+			}
+		}
+		if ((*num_locks = j) > 1)
+			qsort(locks, *num_locks, sizeof(_lock), lock_cmp);
+#endif
+	}
+	return locks;
+}
+
+static pg_stat *find_pg_proc_by_pid(pg_stat_list pg_stats, uint32 pid)
+{
+	pg_stat *low = pg_stats.values;
+	pg_stat *high = low + pg_stats.pos - 1;
+
+	while (low <= high)
+	{
+		pg_stat *middle = low + (high - low) / 2;
+
+		if (pid < middle->pid)
+			high = middle - 1;
+		else if (pid > middle->pid)
+			low = middle + 1;
+		else
+			return middle;
+	}
+
+	return NULL;
+}
+
+static void update_blockers(pg_stat_list pg_stats, pg_stat *blocked, int blocker_pid)
+{
+	int			i;
+	bool		e = false;
+	pg_stat	   *blocker;
+
+	for (i = 0; i < blocked->num_blockers; ++i)
+		if ((e = (blocked->blocking_pids[i] == blocker_pid)))
+			break;
+
+	if (!e && (blocker = find_pg_proc_by_pid(pg_stats, blocker_pid)))
+	{
+		blocker->is_blocker = true;
+		if (!blocked->blocking_pids)
+			blocked->blocking_pids = palloc(pg_stats.pos * sizeof(uint32));
+		blocked->blocking_pids[blocked->num_blockers++] = blocker_pid;
+	}
+}
+
+static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock *locks, int num_locks)
+{
+	int	i, j;
+
+	for (i = 0; i < num_locks; i++)
+	{
+		pg_stat		*blocked;
+		_lock		 l = locks[i];
+
+		if (IS_GRANTED(l) || !(blocked = find_pg_proc_by_pid(pg_stats, l.pid)))
+			continue;
+
+#if PG_VERSION_NUM < 90600
+		for (j = i + 1; j < num_locks; j++)
+		{
+			_lock m = locks[j];
+
+			if (l.type != m.type || l.field1 != m.field1 || l.field2 != m.field2
+					|| l.field3 != m.field3 || l.field4 != m.field4) break;
+
+			if (!IS_GRANTED(m)) continue;
+
+			if (l.pid != m.pid)
+				update_blockers(pg_stats, blocked, m.pid);
+		}
+#else
+		{
+			int			  num_blockers;
+			Datum		 *blockers;
+			ArrayType	 *elems;
+			MemoryContext uppercxt = CurrentMemoryContext;
+
+			MemoryContextSwitchTo(othercxt);
+			elems = DatumGetArrayTypeP(DirectFunctionCall1(pg_blocking_pids, Int32GetDatum(l.pid)));
+			deconstruct_array(elems, INT4OID, sizeof(int32), true, 'i', &blockers, NULL, &num_blockers);
+			MemoryContextSwitchTo(uppercxt);
+
+			for (j = 0; j < num_blockers; ++j)
+				update_blockers(pg_stats, blocked, DatumGetInt32(blockers[j]));
+		}
+#endif
+	}
+}
+
 
 static void pg_stat_list_init(pg_stat_list *list)
 {
@@ -108,7 +293,7 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 		FREE(ps.query);
 		FREE(ps.usename);
 		FREE(ps.datname);
-		FREE(ps.locked_by);
+		FREE(ps.blocking_pids);
 
 		if (ps.ps.free_cmdline)
 			FREE(ps.ps.cmdline);
@@ -129,7 +314,6 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 	list->values[list->pos++] = ps;
 	return true;
 }
-
 
 static size_t json_escaped_size(const char *s, size_t len)
 {
@@ -301,6 +485,9 @@ static unsigned long long get_memory_usage(const char *proc_file)
 	return (unsigned long long)(resident - share) * mem_page_size;
 }
 
+#define TAB_ENTRY(STRING, TARGET) {STRING, sizeof(STRING) - 1, TARGET}
+#define IO_TAB(NAME) TAB_ENTRY(#NAME ": ", &pi.NAME)
+
 static proc_io read_proc_io(const char *proc_file)
 {
 	int i = 0, j = 0;
@@ -311,9 +498,9 @@ static proc_io read_proc_io(const char *proc_file)
 		size_t name_len;
 		unsigned long long *value;
 	} io_tab[] = {
-		{"read_bytes: ", 12, &pi.read_bytes},
-		{"write_bytes: ", 13, &pi.write_bytes},
-		{"cancelled_write_bytes: ", 23, &pi.cancelled_write_bytes},
+		IO_TAB(read_bytes),
+		IO_TAB(write_bytes),
+		IO_TAB(cancelled_write_bytes),
 		{NULL, 0, NULL}
 	};
 
@@ -322,7 +509,7 @@ static proc_io read_proc_io(const char *proc_file)
 	if (iofd == NULL)
 		return pi;
 
-	while (fgets(buf, sizeof(buf), iofd) && i < sizeof(io_tab)/sizeof(struct _io_tab) - 1) {
+	while (fgets(buf, sizeof(buf), iofd) && i < lengthof(io_tab) - 1) {
 		for (j = 0; io_tab[j].name != NULL; ++j)
 			if (strncmp(io_tab[j].name, buf, io_tab[j].name_len) == 0) {
 				++i;
@@ -403,8 +590,6 @@ static void read_procfs(proc_stat_list *list)
 
 	list->pos = 0;
 
-	pgstat_report_activity(STATE_RUNNING, "collecting statistics from procfs");
-
 	if ((proc = opendir(proc_file)) == NULL) {
 		elog(ERROR, "couldn't open '/proc'");
 		return;
@@ -470,6 +655,34 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
+#define PARALLEL_WORKER_PROC_NAME PARALLEL_WORKER_NAME " for PID"
+#define LOGICAL_LAUNCHER_PROC_NAME LOGICAL_LAUNCHER_NAME "  "
+#define LOGICAL_WORKER_PROC_NAME LOGICAL_WORKER_NAME " for"
+
+#define BACKEND_ENTRY(CMDLINE_PATTERN, TYPE) TAB_ENTRY(CMDLINE_PATTERN " ", PG_##TYPE)
+
+#define CMDLINE(TYPE) TYPE##_PROC_NAME
+#define OTH_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE(TYPE), TYPE)
+#if PG_VERSION_NUM < 110000
+	#define WAL_RECEIVER_PROC_NAME "wal receiver"
+	#define WAL_SENDER_PROC_NAME "wal sender"
+	#define WAL_WRITER_PROC_NAME "wal writer"
+	#define BG_WRITER_PROC_NAME "writer"
+	#define BG_WORKER_PROC_NAME "bgworker:"
+
+	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE) " process"
+	#define BGWORKER(TYPE) BACKEND_ENTRY(CMDLINE(BG_WORKER) " " CMDLINE(TYPE), TYPE)
+#else
+	#define WAL_RECEIVER_PROC_NAME WAL_RECEIVER_NAME
+	#define WAL_SENDER_PROC_NAME WAL_SENDER_NAME
+	#define WAL_WRITER_PROC_NAME WAL_WRITER_NAME
+	#define BG_WRITER_PROC_NAME "background writer"
+
+	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE)
+	#define BGWORKER(TYPE) OTH_BACKEND(TYPE)
+#endif
+#define AUX_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE_PATTERN(TYPE) "  ", TYPE)
+
 static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 {
 	PgBackendType type = PG_UNDEFINED;
@@ -482,39 +695,25 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			size_t name_len;
 			PgBackendType type;
 		} backend_tab[] = {
+			AUX_BACKEND(ARCHIVER),
+			AUX_BACKEND(STARTUP),
+			AUX_BACKEND(WAL_RECEIVER),
+			BACKEND_ENTRY(CMDLINE_PATTERN(WAL_SENDER), WAL_SENDER),
+			AUX_BACKEND(AUTOVAC_LAUNCHER),
+			AUX_BACKEND(AUTOVAC_WORKER),
+			BGWORKER(PARALLEL_WORKER),
+			BGWORKER(LOGICAL_LAUNCHER),
+			BGWORKER(LOGICAL_WORKER),
 #if PG_VERSION_NUM < 110000
-			{"archiver process   ", 19, PG_ARCHIVER},
-			{"startup process   ", 18, PG_STARTUP},
-			{"wal receiver process   ", 23, PG_WAL_RECEIVER},
-			{"wal sender process ", 19, PG_WAL_SENDER},
-			{"autovacuum launcher process   ", 30, PG_AUTOVAC_LAUNCHER},
-			{"autovacuum worker process   ", 28, PG_AUTOVAC_WORKER},
-			{"bgworker: logical replication launcher   ", 41, PG_LOGICAL_LAUNCHER},
-			{"bgworker: logical replication worker for ", 41, PG_LOGICAL_WORKER},
-			{"bgworker: ", 10, PG_BG_WORKER},
-			{"checkpointer process   ", 23, PG_CHECKPOINTER},
-			{"logger process   ", 17, PG_LOGGER},
-			{"stats collector process   ", 26, PG_STATS_COLLECTOR},
-			{"wal writer process   ", 21, PG_WAL_WRITER},
-			{"writer process   ", 17, PG_BG_WRITER},
-#else
-			{"archiver   ", 11, PG_ARCHIVER},
-			{"startup   ", 10, PG_STARTUP},
-			{"walreceiver   ", 14, PG_WAL_RECEIVER},
-			{"walsender ", 10, PG_WAL_SENDER},
-			{"autovacuum launcher   ", 22, PG_AUTOVAC_LAUNCHER},
-			{"autovacuum worker   ", 20, PG_AUTOVAC_WORKER},
-			{"logical replication launcher   ", 31, PG_LOGICAL_LAUNCHER},
-			{"logical replication worker for ", 31, PG_LOGICAL_WORKER},
-			{"background writer   ", 20, PG_BG_WRITER},
-			{"checkpointer   ", 15, PG_CHECKPOINTER},
-			{"logger   ", 9, PG_LOGGER},
-			{"stats collector   ", 18, PG_STATS_COLLECTOR},
-			{"walwriter   ", 12, PG_WAL_WRITER},
-
+			OTH_BACKEND(BG_WORKER),
 #endif
-			{"??? process   ", 14, PG_UNKNOWN},
-			{NULL, 0, 0}
+			AUX_BACKEND(CHECKPOINTER),
+			AUX_BACKEND(LOGGER),
+			AUX_BACKEND(STATS_COLLECTOR),
+			AUX_BACKEND(WAL_WRITER),
+			AUX_BACKEND(BG_WRITER),
+			OTH_BACKEND(UNKNOWN),
+			{NULL, 0, PG_UNDEFINED}
 		};
 
 		for (j = 0; backend_tab[j].name != NULL; ++j)
@@ -559,16 +758,16 @@ static void read_proc_cmdline(pg_stat *stat)
 		stat->type = type;
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
 				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest) {
-#if PG_VERSION_NUM >= 100000
 			if (type == PG_WAL_SENDER && stat->usename) {
 				size_t len = strlen(stat->usename) - 2;
 				if (strncmp(rest, stat->usename + 1, len) == 0 && rest[len] == ' ')
 					rest += len + 1;
 			}
-#endif
 			stat->query = json_escape_string(rest);
 		} else if ((type == PG_LOGICAL_WORKER || type == PG_BG_WORKER) && *rest)
 			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - 3);
+		else if (type == PG_PARALLEL_WORKER && *rest)
+			stat->parent_pid = strtoul(rest, NULL, 10);
 	}
 	fclose(f);
 }
@@ -620,100 +819,188 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 	}
 }
 
+static int cmp_int(const void *va, const void *vb)
+{
+	uint32 a = *((const uint32 *) va);
+	uint32 b = *((const uint32 *) vb);
+
+	if (a == b) return 0;
+	return (a > b) ? 1 : -1;
+}
+
+static double calculate_age(TimestampTz ts)
+{
+	double ret = (GetCurrentTimestamp() - ts) / 1000000.0;
+	return ret > 0 ? ret : 0;
+}
+
 static void get_pg_stat_activity(pg_stat_list *pg_stats)
 {
-	int ret;
-	MemoryContext uppercxt = CurrentMemoryContext;
+	bool		 init_postgres = false;
+	int			 i, num_backends, num_locks;
+	_lock		*locks;
+	MemoryContext othercxt, uppercxt = CurrentMemoryContext;
 
-	SetCurrentStatementStartTimestamp();
-	StartTransactionCommand();
-	SPI_connect();
-	PushActiveSnapshot(GetTransactionSnapshot());
-	pgstat_report_activity(STATE_RUNNING, pg_stat_activity_query);
+	num_backends = pgstat_fetch_stat_numbackends();
 
-	/* We can now execute queries via SPI */
-	ret = SPI_execute_plan(pg_stat_activity_query_plan, NULL, NULL, true, 0);
-
-	if (ret != SPI_OK_SELECT)
-		elog(FATAL, "cannot select from pg_stat_activity: error code %d", ret);
-
-	pg_stats->recovery_in_progress = RecoveryInProgress();
-	pg_stats->total_connections = SPI_processed + 1;
-	pg_stats->active_connections = 0;
-
-	if (SPI_processed > 0)
-	{
-		bool isnull, is_locker, is_idle;
-		int a, len;
-		Datum data;
-		text *value;
-		char *text_value;
-
-		MemoryContext oldcxt = MemoryContextSwitchTo(uppercxt);
-		for (a = 0; a < SPI_processed; a++) {
-			pg_stat ps = {0, };
-#if PG_VERSION_NUM >= 100000
-			ps.type = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 8, &isnull));
+#if PG_VERSION_NUM >= 90600
+	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_SIZES);
 #else
-			ps.type = PG_BACKEND;
+	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_MINSIZE,
+									ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
+#endif
+	MemoryContextSwitchTo(othercxt);
+	locks = get_pg_locks(&num_locks);
+	MemoryContextSwitchTo(uppercxt);
+
+	for (i = 1; i <= num_backends; ++i)
+	{
+		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
+		if (beentry
+#if PG_VERSION_NUM >= 100000
+				&& beentry->st_backendType != B_AUTOVAC_LAUNCHER
+				&& beentry->st_backendType != B_BG_WRITER
+				&& beentry->st_backendType != B_CHECKPOINTER
+				&& beentry->st_backendType != B_STARTUP
+				&& beentry->st_backendType != B_WAL_RECEIVER
+				&& beentry->st_backendType != B_WAL_WRITER
+#endif
+				&& beentry->st_procpid != MyProcPid)
+		{
+			pg_stat ps = {0, };
+
+			ps.pid = beentry->st_procpid;
+			ps.databaseid = beentry->st_databaseid;
+			ps.userid = beentry->st_userid;
+			ps.state = beentry->st_state;
+
+			/* it is proven experimetally that it is safe to run InitPostgres only when we
+			 * got some other backends connected which already initialized system caches.
+			 * In such case there will be entries with valid databaseid and userid. */
+			if (ps.userid && ps.databaseid && IsInitProcessingMode())
+				init_postgres = true;
+
+			if (ps.state == STATE_IDLEINTRANSACTION)
+			{
+				if (beentry->st_xact_start_timestamp == beentry->st_state_start_timestamp)
+					ps.idle_in_transaction_age = 0;
+				else
+					ps.idle_in_transaction_age = calculate_age(beentry->st_state_start_timestamp);
+			} else if (ps.state == STATE_RUNNING)
+#if PG_VERSION_NUM >= 110000
+				if (*beentry->st_activity_raw)
+				{
+					char	*query;
+					MemoryContextSwitchTo(othercxt);
+					query = pgstat_clip_activity(beentry->st_activity_raw);
+					MemoryContextSwitchTo(uppercxt);
+					ps.query = json_escape_string(query);
+				}
+#else
+				ps.query = *beentry->st_activity ? json_escape_string(beentry->st_activity) : NULL;
 #endif
 
-			is_idle = true;
+			if (beentry->st_xact_start_timestamp)
+				ps.age = calculate_age(beentry->st_xact_start_timestamp);
+			else if (ps.state == STATE_RUNNING && beentry->st_activity_start_timestamp)
+				ps.age = calculate_age(beentry->st_activity_start_timestamp);
+			else ps.age = -1;
 
-			ps.pid = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 1, &isnull)); 
-			is_locker = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 7, &isnull));
-			data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 6, &isnull);
+#if PG_VERSION_NUM >= 100000
 
-			if (!isnull) {
-				value = PG_DETOAST_DATUM_PACKED(data);
-				text_value = VARDATA_ANY(value);
-				len = VARSIZE_ANY_EXHDR(value);
-				is_idle = len == 4 && !strncmp(text_value, "idle", 4);
-#if PG_VERSION_NUM < 100000
-				if (strncmp(text_value, "autovacuum: ", 12) == 0)
+			ps.type = beentry->st_backendType == B_BG_WORKER ? PG_UNDEFINED : beentry->st_backendType;
+#else
+#if PG_VERSION_NUM >= 90600
+			/* hacky way to distinguish between normal backend and parallel worker */
+			if (beentry->st_state == STATE_UNDEFINED && beentry->st_state_start_timestamp == 0
+					&& beentry->st_activity_start_timestamp == 0 && ps.age != -1)
+				ps.type = PG_UNDEFINED;
+			else
+#endif
+			{
+				SockAddr zero_clientaddr = {0,};
+				/* hacky way to distinguish between normal backend and presumably bgworker */
+				if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr, sizeof(zero_clientaddr)) == 0
+						|| ps.databaseid == 0)
+					ps.type = PG_UNDEFINED;
+				else if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
 					ps.type = PG_AUTOVAC_WORKER;
+				else ps.type = PG_BACKEND;
+			}
 #endif
-			}
-
-			if (is_locker || !is_idle || ps.type != PG_BACKEND) {
-				ps.query = isnull || len == 0 ? NULL : json_escape_string_len(text_value, len);
-
-				data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 2, &isnull);
-				if (isnull) ps.datname = NULL;
-				else {
-					value = PG_DETOAST_DATUM_PACKED(data);
-					ps.datname = json_escape_string_len(VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
-				}
-
-				data = SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 3, &isnull);
-				if (isnull) ps.usename = NULL;
-				else {
-					value = PG_DETOAST_DATUM_PACKED(data);
-					ps.usename = json_escape_string_len(VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
-				}
-
-				ps.age = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 4, &isnull));
-				if (isnull) ps.age = -1;
-				ps.locked_by = SPI_getvalue(SPI_tuptable->vals[a], SPI_tuptable->tupdesc, 5);
-				pg_stats->active_connections++;
-			}
-
 			pg_stat_list_add(pg_stats, ps);
 		}
-
-		MemoryContextSwitchTo(oldcxt);
 	}
 
-	/*
-	 * And finish our transaction.
-	 */
-	SPI_finish();
-	PopActiveSnapshot();
-	CommitTransactionCommand();
-	pg_stats->uptime = system_stats_old.uptime;
+	pgstat_clear_snapshot();
 
-	if (pg_stats->pos > 0)
+	if ((num_backends = pg_stats->pos) > 1)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
+
+	if (num_locks > 0)
+		enrich_pg_stats(othercxt, *pg_stats, locks, num_locks);
+
+	MemoryContextDelete(othercxt);
+
+	pg_stats->recovery_in_progress = RecoveryInProgress();
+	pg_stats->total_connections = num_backends;
+	pg_stats->active_connections = 0;
+
+	if (init_postgres)
+	{
+#if PG_VERSION_NUM >= 110000
+		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+#elif PG_VERSION_NUM >= 90500
+		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+#else
+		InitPostgres(NULL, InvalidOid, NULL, NULL);
+#endif
+		SetProcessingMode(NormalProcessing);
+	}
+
+	if (IsNormalProcessingMode())
+	{
+		StartTransactionCommand();
+		(void) GetTransactionSnapshot();
+	}
+
+	for (i = 0; i < num_backends; ++i)
+	{
+		pg_stat *ps = pg_stats->values + i;
+		if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
+			if (ps->num_blockers > 1)
+				qsort(ps->blocking_pids, ps->num_blockers, sizeof(uint32), cmp_int);
+
+			if (ps->userid && IsNormalProcessingMode())
+			{
+				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
+				if (HeapTupleIsValid(roleTup))
+				{
+					othercxt = MemoryContextSwitchTo(uppercxt);
+					ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
+					MemoryContextSwitchTo(othercxt);
+					ReleaseSysCache(roleTup);
+				}
+			}
+
+			if (ps->databaseid && IsNormalProcessingMode())
+			{
+				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
+				if (HeapTupleIsValid(databaseTup))
+				{
+					othercxt = MemoryContextSwitchTo(uppercxt);
+					ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
+					MemoryContextSwitchTo(othercxt);
+					ReleaseSysCache(databaseTup);
+				}
+			}
+
+			pg_stats->active_connections++;
+		}
+	}
+
+	if (IsNormalProcessingMode())
+		CommitTransactionCommand();
 }
 
 pg_stat_list get_postgres_stats(void)
@@ -723,9 +1010,10 @@ pg_stat_list get_postgres_stats(void)
 	read_procfs(&proc_stats);
 
 	pg_stat_list_free_resources(&pg_stats_new);
+
 	get_pg_stat_activity(&pg_stats_new);
 
-	pgstat_report_activity(STATE_IDLE, NULL);
+	pg_stats_new.uptime = system_stats_old.uptime;
 
 	merge_stats(&pg_stats_new, proc_stats);
 	diff_pg_stats(pg_stats_current, pg_stats_new);
@@ -739,22 +1027,6 @@ pg_stat_list get_postgres_stats(void)
 
 void postgres_stats_init(void)
 {
-	SetCurrentStatementStartTimestamp();
-	StartTransactionCommand();
-	SPI_connect();
-	PushActiveSnapshot(GetTransactionSnapshot());
-
-	pg_stat_activity_query_plan = SPI_prepare(pg_stat_activity_query, 0, NULL);
-	if (pg_stat_activity_query_plan == NULL)
-		elog(FATAL, "pg_stat_activity_query: SPI_prepare returned %d", SPI_result);
-
-	if (SPI_keepplan(pg_stat_activity_query_plan))
-		elog(FATAL, "pg_stat_activity_query: SPI_keepplan failed");
-
-	SPI_finish();
-	PopActiveSnapshot();
-	CommitTransactionCommand();
-
 	mem_page_size = getpagesize() / 1024;
 	pg_stat_list_init(&pg_stats_current);
 	pg_stat_list_init(&pg_stats_new);

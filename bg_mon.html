@@ -267,9 +267,15 @@ function humanReadableTimeInterval(data) {
 
 function sort_processes(data) {
 	var blocked = {};
+	var children = {};
 	var running = [];
 	for (var i = 0; i < data.length; ++i) {
-		if ('locked_by' in data[i]) {
+		if ('parent_pid' in data[i]) {
+			if (data[i]['parent_pid'] in children)
+				children[data[i]['parent_pid']].push(data[i]);
+			else
+				children[data[i]['parent_pid']] = [data[i]];
+		} else if ('locked_by' in data[i]) {
 			blocked_pid = data[i]['locked_by'][0];
 			if (blocked_pid in blocked)
 				blocked[blocked_pid].push(data[i]);
@@ -288,7 +294,7 @@ function sort_processes(data) {
 
 	running.sort(age_sort);
 
-	if (Object.getOwnPropertyNames(blocked).length == 0)
+	if (Object.getOwnPropertyNames(blocked).length == 0 && Object.getOwnPropertyNames(children).length == 0)
 		return running;
 
 	var ret = [];
@@ -297,9 +303,20 @@ function sort_processes(data) {
 	for (var key in blocked)
 		blocked[key].sort(age_sort);
 
+	for (var key in children)
+		children[key].sort(age_sort);
+
 	for (var r in running) {
 		ret.push(r = running[r]);
-		if (r['pid'] in blocked) {
+		if (r['pid'] in children) {
+			while (children[r['pid']].length > 0) {
+				var child_row = children[r['pid']].pop();
+				if (!('query' in child_row))
+					child_row['query'] = r['query'];
+				child_row['query'] = child_row['parent_pid'] + ': ' + child_row['query'];
+				ret.push(child_row);
+			}
+		} else if (r['pid'] in blocked) {
 			Array.prototype.push.apply(blocked_temp, blocked[r['pid']]);
 			delete blocked[r['pid']];
 			while (blocked_temp.length > 0) {
