@@ -154,6 +154,7 @@ static const char *process_type(pg_stat p)
 		QUOTE(ARCHIVER_PROC_NAME),
 		QUOTE(LOGGER_PROC_NAME),
 		QUOTE(STATS_COLLECTOR_PROC_NAME),
+		QUOTE(PARALLEL_WORKER_NAME),
 		QUOTE(LOGICAL_LAUNCHER_NAME),
 		QUOTE(LOGICAL_WORKER_NAME)
 	};
@@ -276,7 +277,10 @@ static void prepare_statistics_output(struct evbuffer *evb)
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
-			if (s.type == PG_BACKEND || s.type == PG_AUTOVAC_WORKER) {
+			if (s.type == PG_BACKEND || s.type == PG_AUTOVAC_WORKER || s.type == PG_PARALLEL_WORKER) {
+				if (s.type == PG_PARALLEL_WORKER && s.parent_pid > 0)
+					evbuffer_add_printf(evb, ", \"parent_pid\": %d", s.parent_pid);
+
 				if (s.num_blockers > 0) {
 					int j;
 					evbuffer_add_printf(evb, ", \"locked_by\": [%d", s.blocking_pids[0]);

@@ -655,6 +655,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
+#define PARALLEL_WORKER_PROC_NAME PARALLEL_WORKER_NAME " for PID"
 #define LOGICAL_LAUNCHER_PROC_NAME LOGICAL_LAUNCHER_NAME "  "
 #define LOGICAL_WORKER_PROC_NAME LOGICAL_WORKER_NAME " for"
 
@@ -700,6 +701,7 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			BACKEND_ENTRY(CMDLINE_PATTERN(WAL_SENDER), WAL_SENDER),
 			AUX_BACKEND(AUTOVAC_LAUNCHER),
 			AUX_BACKEND(AUTOVAC_WORKER),
+			BGWORKER(PARALLEL_WORKER),
 			BGWORKER(LOGICAL_LAUNCHER),
 			BGWORKER(LOGICAL_WORKER),
 #if PG_VERSION_NUM < 110000
@@ -764,6 +766,8 @@ static void read_proc_cmdline(pg_stat *stat)
 			stat->query = json_escape_string(rest);
 		} else if ((type == PG_LOGICAL_WORKER || type == PG_BG_WORKER) && *rest)
 			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - 3);
+		else if (type == PG_PARALLEL_WORKER && *rest)
+			stat->parent_pid = strtoul(rest, NULL, 10);
 	}
 	fclose(f);
 }
@@ -903,11 +907,26 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			else ps.age = -1;
 
 #if PG_VERSION_NUM >= 100000
+
 			ps.type = beentry->st_backendType == B_BG_WORKER ? PG_UNDEFINED : beentry->st_backendType;
 #else
-			if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
-				ps.type = PG_AUTOVAC_WORKER;
-			else ps.type = ps.databaseid == 0 ? ps.type = PG_UNDEFINED : PG_BACKEND;
+#if PG_VERSION_NUM >= 90600
+			/* hacky way to distinguish between normal backend and parallel worker */
+			if (beentry->st_state == STATE_UNDEFINED && beentry->st_state_start_timestamp == 0
+					&& beentry->st_activity_start_timestamp == 0 && ps.age != -1)
+				ps.type = PG_UNDEFINED;
+			else
+#endif
+			{
+				SockAddr zero_clientaddr = {0,};
+				/* hacky way to distinguish between normal backend and presumably bgworker */
+				if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr, sizeof(zero_clientaddr)) == 0
+						|| ps.databaseid == 0)
+					ps.type = PG_UNDEFINED;
+				else if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
+					ps.type = PG_AUTOVAC_WORKER;
+				else ps.type = PG_BACKEND;
+			}
 #endif
 			pg_stat_list_add(pg_stats, ps);
 		}

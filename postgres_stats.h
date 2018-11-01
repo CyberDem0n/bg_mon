@@ -18,6 +18,7 @@ typedef enum PgBackendType
 	PG_ARCHIVER,
 	PG_LOGGER,
 	PG_STATS_COLLECTOR,
+	PG_PARALLEL_WORKER,
 	PG_LOGICAL_LAUNCHER,
 	PG_LOGICAL_WORKER
 } PgBackendType;
@@ -35,6 +36,7 @@ typedef enum PgBackendType
 #define ARCHIVER_PROC_NAME "archiver"
 #define LOGGER_PROC_NAME "logger"
 #define STATS_COLLECTOR_PROC_NAME "stats collector"
+#define PARALLEL_WORKER_NAME "parallel worker"
 #define LOGICAL_LAUNCHER_NAME "logical replication launcher"
 #define LOGICAL_WORKER_NAME "logical replication worker"
 
@@ -84,6 +86,7 @@ typedef struct {
 	bool is_blocker;
 	uint32 *blocking_pids;
 	uint32 num_blockers;
+	pid_t parent_pid;
 	char *query;
 	proc_stat ps;
 } pg_stat;
