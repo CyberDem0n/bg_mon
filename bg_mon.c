@@ -81,6 +81,11 @@ static bool accept_brotli(const struct evkeyvalq *input_headers)
 #define MyLatch &MyProc->procLatch
 #endif
 
+#define QUOTE(STRING) "\"" STRING "\""
+#if PG_VERSION_NUM < 90500
+#define MyLatch &MyProc->procLatch
+#endif
+
 /*
  * Signal handler for SIGTERM
  *		Set a flag to let the main loop to terminate, and set our latch to wake
@@ -204,7 +209,7 @@ static const char *get_query(pg_stat s)
 		case STATE_DISABLED:
 			return QUOTE("disabled");
 		default:
-			return NULL;
+			return s.query;
 	}
 }
 
