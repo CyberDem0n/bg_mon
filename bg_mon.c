@@ -76,6 +76,11 @@ static bool accept_brotli(const struct evkeyvalq *input_headers)
 }
 #endif
 
+#define QUOTE(STRING) "\"" STRING "\""
+#if PG_VERSION_NUM < 90500
+#define MyLatch &MyProc->procLatch
+#endif
+
 /*
  * Signal handler for SIGTERM
  *		Set a flag to let the main loop to terminate, and set our latch to wake
@@ -87,12 +92,10 @@ bg_mon_sigterm(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	got_sigterm = true;
-#if PG_VERSION_NUM >= 100000
-	SetLatch(MyLatch);
-#else
+#if PG_VERSION_NUM < 90500
 	if (MyProc)
-		SetLatch(&MyProc->procLatch);
 #endif
+	SetLatch(MyLatch);
 	errno = save_errno;
 }
 
@@ -107,12 +110,10 @@ bg_mon_sighup(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	got_sighup = true;
-#if PG_VERSION_NUM >= 100000
-	SetLatch(MyLatch);
-#else
+#if PG_VERSION_NUM < 90500
 	if (MyProc)
-		SetLatch(&MyProc->procLatch);
 #endif
+	SetLatch(MyLatch);
 	errno = save_errno;
 }
 
@@ -155,39 +156,53 @@ static void device_io_output(struct evbuffer *evb, device_stat *stats, int id)
 
 static const char *process_type(pg_stat p)
 {
-	switch (p.type) {
-		case PG_UNKNOWN:
-			return "\"???\"";
-		case PG_AUTOVAC_LAUNCHER:
-			return "\"autovacuum launcher\"";
-		case PG_AUTOVAC_WORKER:
-			return "\"autovacuum worker\"";
-		case PG_BACKEND:
-			return "\"backend\"";
-		case PG_BG_WORKER:
-			return p.ps.cmdline;
-		case PG_BG_WRITER:
-			return "\"bgwriter\"";
-		case PG_CHECKPOINTER:
-			return "\"checkpointer\"";
-		case PG_STARTUP:
-			return "\"startup\"";
-		case PG_WAL_RECEIVER:
-			return "\"walreceiver\"";
-		case PG_WAL_SENDER:
-			return "\"walsender\"";
-		case PG_WAL_WRITER:
-			return "\"walwriter\"";
-		case PG_ARCHIVER:
-			return "\"archiver\"";
-		case PG_LOGGER:
-			return "\"logger\"";
-		case PG_STATS_COLLECTOR:
-			return "\"stats collector\"";
-		case PG_LOGICAL_LAUNCHER:
-			return "\"logical replication launcher\"";
-		case PG_LOGICAL_WORKER:
-			return "\"logical replication worker\"";
+
+	char *backend_names[] = {
+		NULL,
+		QUOTE(UNKNOWN_PROC_NAME),
+		QUOTE(AUTOVAC_LAUNCHER_PROC_NAME),
+		QUOTE(AUTOVAC_WORKER_PROC_NAME),
+		QUOTE(BACKEND_PROC_NAME),
+		NULL,
+		QUOTE(BG_WRITER_NAME),
+		QUOTE(CHECKPOINTER_PROC_NAME),
+		QUOTE(STARTUP_PROC_NAME),
+		QUOTE(WAL_RECEIVER_NAME),
+		QUOTE(WAL_SENDER_NAME),
+		QUOTE(WAL_WRITER_NAME),
+		QUOTE(ARCHIVER_PROC_NAME),
+		QUOTE(LOGGER_PROC_NAME),
+		QUOTE(STATS_COLLECTOR_PROC_NAME),
+		QUOTE(PARALLEL_WORKER_NAME),
+		QUOTE(LOGICAL_LAUNCHER_NAME),
+		QUOTE(LOGICAL_WORKER_NAME)
+	};
+
+	if (p.type == PG_BG_WORKER)
+		return p.ps.cmdline;
+
+	return backend_names[p.type + 2];
+}
+
+static const char *get_query(pg_stat s)
+{
+	if (s.type == PG_LOGICAL_WORKER)
+		return s.ps.cmdline;
+
+	switch (s.state)
+	{
+		case STATE_IDLE:
+			return s.type == PG_BG_WORKER ? NULL : s.query ? s.query : QUOTE("idle");
+		case STATE_RUNNING:
+			return s.query;
+		case STATE_IDLEINTRANSACTION:
+			return s.idle_in_transaction_age == 0 ? QUOTE("idle in transaction") : NULL;
+		case STATE_FASTPATH:
+			return QUOTE("fastpath function call");
+		case STATE_IDLEINTRANSACTION_ABORTED:
+			return QUOTE("idle in transaction (aborted)");
+		case STATE_DISABLED:
+			return QUOTE("disabled");
 		default:
 			return NULL;
 	}
@@ -231,7 +246,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	}
 
 	evbuffer_add_printf(evb, "}}, \"disk_stats\": {");
-	for (i = 0; i < sizeof(ds.values)/sizeof(disk_stat); ++i) {
+	for (i = 0; i < lengthof(ds.values); ++i) {
 		disk_stat device = ds.values[i];
 		if (i > 0) evbuffer_add_printf(evb, ", ");
 		evbuffer_add_printf(evb, "\"%s\": {\"device\": {\"space\": ", device.type);
@@ -263,7 +278,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "}, \"processes\": [");
 	for (i = 0; i < p.pos; ++i) {
 		pg_stat s = p.values[i];
-		if (s.type != PG_BACKEND || s.query != NULL) {
+		if (s.type != PG_BACKEND || s.query != NULL || s.is_blocker) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
 			const char *tmp = process_type(s);
@@ -274,12 +289,20 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 			evbuffer_add_printf(evb, "\"cpu\": {\"user\": %2.1f, \"system\": %2.1f, ", ps.utime_diff, ps.stime_diff);
 			evbuffer_add_printf(evb, "\"guest\": %2.1f}, \"io\": {\"read\": %lu, ", ps.gtime_diff, io.read_diff);
 			evbuffer_add_printf(evb, "\"write\": %lu}, \"uss\": %llu", io.write_diff, ps.uss);
-			if (s.type == PG_BACKEND) {
-				if (s.locked_by != NULL)
-					evbuffer_add_printf(evb, ", \"locked_by\": [%s]", s.locked_by);
+			if (s.type == PG_BACKEND || s.type == PG_AUTOVAC_WORKER || s.type == PG_PARALLEL_WORKER) {
+				if (s.type == PG_PARALLEL_WORKER && s.parent_pid > 0)
+					evbuffer_add_printf(evb, ", \"parent_pid\": %d", s.parent_pid);
+
+				if (s.num_blockers > 0) {
+					int j;
+					evbuffer_add_printf(evb, ", \"locked_by\": [%d", s.blocking_pids[0]);
+					for (j = 1; j < s.num_blockers; ++j)
+						evbuffer_add_printf(evb, ",%d", s.blocking_pids[j]);
+					evbuffer_add_printf(evb, "]");
+				}
 
 				if (s.age > -1)
-					evbuffer_add_printf(evb, ", \"age\": %d", s.age);
+					evbuffer_add_printf(evb, ", \"age\": %.3g", s.age);
 			}
 
 			if (s.datname != NULL || s.type == PG_BACKEND)
@@ -287,8 +310,9 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 			if (s.usename != NULL || s.type == PG_BACKEND)
 				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 
-			tmp = s.type == PG_LOGICAL_WORKER ? ps.cmdline : s.query;
-			if (tmp != NULL)
+			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0)
+				evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %.3g\"", s.idle_in_transaction_age);
+			else if ((tmp = get_query(s)) != NULL)
 				evbuffer_add_printf(evb, ", \"query\": %s", tmp);
 			evbuffer_add_printf(evb, "}");
 		}
@@ -453,12 +477,6 @@ bg_mon_main(Datum main_arg)
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
 
-	/* Connect to our database */
-#if PG_VERSION_NUM >= 110000
-	BackgroundWorkerInitializeConnection("postgres", NULL, 0);
-#else
-	BackgroundWorkerInitializeConnection("postgres", NULL);
-#endif
 	initialize_bg_mon();
 	evthread_use_pthreads();
 
@@ -525,15 +543,12 @@ restart:
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 						   naptime,
 						   PG_WAIT_EXTENSION);
-
-			ResetLatch(MyLatch);
 #else
-			int rc = WaitLatch(&MyProc->procLatch,
+			int rc = WaitLatch(MyLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 						   naptime);
-
-			ResetLatch(&MyProc->procLatch);
 #endif
+			ResetLatch(MyLatch);
 			/* emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 				proc_exit(1);
@@ -623,9 +638,8 @@ _PG_init(void)
 
 	/* set up common data for all our workers */
 	memset(&worker, 0, sizeof(worker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
-		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	worker.bgw_start_time = BgWorkerStart_PostmasterStart;
 	worker.bgw_restart_time = 1;
 #if PG_VERSION_NUM >= 100000
 	sprintf(worker.bgw_library_name, "bg_mon");
@@ -641,7 +655,6 @@ _PG_init(void)
 	 * Now fill in worker-specific data, and do the actual registrations.
 	 */
 	snprintf(worker.bgw_name, BGW_MAXLEN, "bg_mon");
-//	worker.bgw_main_arg = Int32GetDatum(i);
 
 	RegisterBackgroundWorker(&worker);
 }

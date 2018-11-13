@@ -83,14 +83,15 @@ static void read_net_stats(net_stats *ns)
 static void copy_net_stats(net_stats o, net_stats *n)
 {
 	int i, len = 0;
+
+	n->size = 0;
+
 	for (i = 0; i < o.size; ++i)
 		if (o.values[i].is_used)
 			++len;
 	if (len == 0) return;
 	else if (len > n->len)
 		n->values = repalloc(n->values, (n->len = len)*sizeof(net_stat));
-
-	n->size = 0;
 
 	for (i = 0; i < o.size; ++i)
 		if (o.values[i].is_used) {
