@@ -18,6 +18,7 @@
 /* these headers are used by this particular worker's code */
 #include "pgstat.h"
 #include "tcop/utility.h"
+#include "utils/memutils.h"
 #include "utils/timestamp.h"
 
 #include "net_stats.h"
@@ -360,6 +361,14 @@ bg_mon_main(Datum main_arg)
 	struct event_base *base;
 	struct evhttp *http;
 	struct evhttp_bound_socket *handle;
+
+#if PG_VERSION_NUM >= 90600
+	MemoryContext bg_mon_cxt = AllocSetContextCreate(TopMemoryContext, "BgMon", ALLOCSET_SMALL_SIZES);
+#else
+	MemoryContext bg_mon_cxt = AllocSetContextCreate(TopMemoryContext, "BgMon", ALLOCSET_SMALL_MINSIZE,
+													ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
+#endif
+	MemoryContextSwitchTo(bg_mon_cxt);
 
 	pg_start_time = timestamptz_to_time_t(PgStartTime);
 
