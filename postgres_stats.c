@@ -100,11 +100,10 @@ static _lock *get_pg_locks(int *num_locks)
 #if PG_VERSION_NUM < 90600
 	PredicateLockData	*predLockData = GetPredicateLockStatusData();
 
-	*num_locks = lockData->nelements + predLockData->nelements;
+	*num_locks = 2 * lockData->nelements + predLockData->nelements;
 #else
 	*num_locks = lockData->nelements;
 #endif
-
 
 	if (*num_locks > 0)
 	{
@@ -116,30 +115,23 @@ static _lock *get_pg_locks(int *num_locks)
 		{
 			_lock			 *l;
 			LockInstanceData *instance = &(lockData->locks[i]);
-			LOCKMODE		  mode = 0;
 			bool			  granted = false;
 
 			if (instance->holdMask)
-				for (mode = 0; mode < MAX_LOCKMODES; mode++)
-					if (instance->holdMask & LOCKBIT_ON(mode))
-					{
-						granted = true;
-						instance->holdMask &= LOCKBIT_OFF(mode);
-						break;
-					}
+			{
+				instance->holdMask = 0;
+				granted = true;
+			}
 
 			if (!granted)
 			{
 				i++;
-				if (instance->waitLockMode != NoLock)
-					mode = instance->waitLockMode;
-				else
+				if (instance->waitLockMode == NoLock)
 					continue;
 			}
 #if PG_VERSION_NUM >= 90600
 			else continue;
 #endif
-
 			l = locks + j++;
 			l->pid = instance->pid;
 #if PG_VERSION_NUM < 90600
@@ -263,12 +255,10 @@ static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock
 			int			  num_blockers;
 			Datum		 *blockers;
 			ArrayType	 *elems;
-			MemoryContext uppercxt = CurrentMemoryContext;
-
-			MemoryContextSwitchTo(othercxt);
+			MemoryContext oldcxt = MemoryContextSwitchTo(othercxt);
 			elems = DatumGetArrayTypeP(DirectFunctionCall1(pg_blocking_pids, Int32GetDatum(l.pid)));
 			deconstruct_array(elems, INT4OID, sizeof(int32), true, 'i', &blockers, NULL, &num_blockers);
-			MemoryContextSwitchTo(uppercxt);
+			MemoryContextSwitchTo(oldcxt);
 
 			for (j = 0; j < num_blockers; ++j)
 				update_blockers(pg_stats, blocked, DatumGetInt32(blockers[j]));
@@ -839,19 +829,19 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	bool		 init_postgres = false;
 	int			 i, num_backends, num_locks;
 	_lock		*locks;
-	MemoryContext othercxt, uppercxt = CurrentMemoryContext;
+	MemoryContext othercxt, oldcxt;
 
 	num_backends = pgstat_fetch_stat_numbackends();
 
 #if PG_VERSION_NUM >= 90600
-	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_SIZES);
+	othercxt = AllocSetContextCreate(CurrentMemoryContext, "Locks snapshot", ALLOCSET_SMALL_SIZES);
 #else
-	othercxt = AllocSetContextCreate(uppercxt, "Locks snapshot", ALLOCSET_SMALL_MINSIZE,
+	othercxt = AllocSetContextCreate(CurrentMemoryContext, "Locks snapshot", ALLOCSET_SMALL_MINSIZE,
 									ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
 #endif
-	MemoryContextSwitchTo(othercxt);
+	oldcxt = MemoryContextSwitchTo(othercxt);
 	locks = get_pg_locks(&num_locks);
-	MemoryContextSwitchTo(uppercxt);
+	MemoryContextSwitchTo(oldcxt);
 
 	for (i = 1; i <= num_backends; ++i)
 	{
@@ -891,9 +881,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				if (*beentry->st_activity_raw)
 				{
 					char	*query;
-					MemoryContextSwitchTo(othercxt);
+					oldcxt = MemoryContextSwitchTo(othercxt);
 					query = pgstat_clip_activity(beentry->st_activity_raw);
-					MemoryContextSwitchTo(uppercxt);
+					MemoryContextSwitchTo(oldcxt);
 					ps.query = json_escape_string(query);
 				}
 #else
@@ -956,7 +946,10 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		InitPostgres(NULL, InvalidOid, NULL, NULL);
 #endif
 		SetProcessingMode(NormalProcessing);
+		MemoryContextSwitchTo(oldcxt);
 	}
+
+	othercxt = CurrentMemoryContext;
 
 	if (IsNormalProcessingMode())
 	{
@@ -976,9 +969,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
 				if (HeapTupleIsValid(roleTup))
 				{
-					othercxt = MemoryContextSwitchTo(uppercxt);
+					oldcxt = MemoryContextSwitchTo(othercxt);
 					ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
-					MemoryContextSwitchTo(othercxt);
+					MemoryContextSwitchTo(oldcxt);
 					ReleaseSysCache(roleTup);
 				}
 			}
@@ -988,9 +981,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
 				if (HeapTupleIsValid(databaseTup))
 				{
-					othercxt = MemoryContextSwitchTo(uppercxt);
+					oldcxt = MemoryContextSwitchTo(othercxt);
 					ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
-					MemoryContextSwitchTo(othercxt);
+					MemoryContextSwitchTo(oldcxt);
 					ReleaseSysCache(databaseTup);
 				}
 			}
@@ -1000,7 +993,10 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	}
 
 	if (IsNormalProcessingMode())
+	{
 		CommitTransactionCommand();
+		MemoryContextSwitchTo(othercxt);
+	}
 }
 
 pg_stat_list get_postgres_stats(void)
