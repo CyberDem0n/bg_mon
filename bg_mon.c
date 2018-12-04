@@ -309,7 +309,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 
 				if (s.age > -1) {
 					if (s.age < 10)
-						evbuffer_add_printf(evb, ", \"age\": %.2f", s.age);
+						evbuffer_add_printf(evb, ", \"age\": %.2g", s.age);
 					else
 						evbuffer_add_printf(evb, ", \"age\": %ld", (long)s.age);
 				}
@@ -322,7 +322,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 
 			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0) {
 				if (s.idle_in_transaction_age < 10)
-					evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %.2f\"", s.idle_in_transaction_age);
+					evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %.2g\"", s.idle_in_transaction_age);
 				else
 					evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %ld\"", (long)s.idle_in_transaction_age);
 			} else if ((tmp = get_query(s)) != NULL)
