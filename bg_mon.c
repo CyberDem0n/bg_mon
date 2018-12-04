@@ -284,7 +284,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "}, \"processes\": [");
 	for (i = 0; i < p.pos; ++i) {
 		pg_stat s = p.values[i];
-		if (s.type != PG_BACKEND || s.query != NULL || s.is_blocker) {
+		if (s.type != PG_BACKEND || s.query != NULL || s.state >= STATE_RUNNING || s.is_blocker) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
 			const char *tmp = process_type(s);
@@ -307,8 +307,12 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 					evbuffer_add_printf(evb, "]");
 				}
 
-				if (s.age > -1)
-					evbuffer_add_printf(evb, ", \"age\": %.3g", s.age);
+				if (s.age > -1) {
+					if (s.age < 10)
+						evbuffer_add_printf(evb, ", \"age\": %.2f", s.age);
+					else
+						evbuffer_add_printf(evb, ", \"age\": %ld", (long)s.age);
+				}
 			}
 
 			if (s.datname != NULL || s.type == PG_BACKEND)
@@ -316,9 +320,12 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 			if (s.usename != NULL || s.type == PG_BACKEND)
 				evbuffer_add_printf(evb, ", \"username\": %s", s.usename == NULL ? "null" : s.usename);
 
-			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0)
-				evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %.3g\"", s.idle_in_transaction_age);
-			else if ((tmp = get_query(s)) != NULL)
+			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0) {
+				if (s.idle_in_transaction_age < 10)
+					evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %.2f\"", s.idle_in_transaction_age);
+				else
+					evbuffer_add_printf(evb, ", \"query\": \"idle in transaction %ld\"", (long)s.idle_in_transaction_age);
+			} else if ((tmp = get_query(s)) != NULL)
 				evbuffer_add_printf(evb, ", \"query\": %s", tmp);
 			evbuffer_add_printf(evb, "}");
 		}
