@@ -21,6 +21,7 @@
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
+#include "bg_mon.h"
 #include "net_stats.h"
 #include "postgres_stats.h"
 #include "disk_stats.h"
@@ -102,6 +103,7 @@ bg_mon_sighup(SIGNAL_ARGS)
 static void
 initialize_bg_mon()
 {
+	debug_print("Start bg_mon initialization");
 	postgres_stats_init();
 	disk_stats_init();
 	system_stats_init();

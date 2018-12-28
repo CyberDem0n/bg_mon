@@ -23,6 +23,7 @@
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
 
+#include "bg_mon.h"
 #include "system_stats.h"
 #include "postgres_stats.h"
 
@@ -830,8 +831,10 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	int			 i, num_backends, num_locks;
 	_lock		*locks;
 	MemoryContext othercxt, oldcxt;
+	debug_print("Start get_pg_stat_activity");
 
 	num_backends = pgstat_fetch_stat_numbackends();
+	debug_print("Number of backends %d", num_backends);
 
 #if PG_VERSION_NUM >= 90600
 	othercxt = AllocSetContextCreate(CurrentMemoryContext, "Locks snapshot", ALLOCSET_SMALL_SIZES);
@@ -846,6 +849,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	for (i = 1; i <= num_backends; ++i)
 	{
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
+		debug_print("Check backend %d", i);
 		if (beentry
 #if PG_VERSION_NUM >= 100000
 				&& beentry->st_backendType != B_AUTOVAC_LAUNCHER
@@ -858,11 +862,14 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				&& beentry->st_procpid != MyProcPid)
 		{
 			pg_stat ps = {0, };
+			debug_print("Backend %d is not me or system backend", i);
 
 			ps.pid = beentry->st_procpid;
 			ps.databaseid = beentry->st_databaseid;
 			ps.userid = beentry->st_userid;
 			ps.state = beentry->st_state;
+			debug_print("Backend pid %d, db %d, state %d",
+						 ps.pid, ps.databaseid, ps.state);
 
 			/* it is proven experimetally that it is safe to run InitPostgres only when we
 			 * got some other backends connected which already initialized system caches.
@@ -919,6 +926,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			}
 #endif
 			pg_stat_list_add(pg_stats, ps);
+		}
+		else {
+			debug_print("Backend %d is system or me", i);
 		}
 	}
 
