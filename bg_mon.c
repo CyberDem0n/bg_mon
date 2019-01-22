@@ -329,7 +329,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	struct evbuffer *evb = evbuffer_new();
 
 	if (strncmp(uri, "/ui", 3)) {
-		if (!(err = system_stats_current.uptime == 0)) {
+		if (!(err = (system_stats_current.uptime == 0))) {
 			prepare_statistics_output(evb);
 			evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "application/json");
 		}
