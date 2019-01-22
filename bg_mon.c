@@ -284,9 +284,9 @@ static void prepare_statistics_output(struct evbuffer *evb)
 
 				if (s.num_blockers > 0) {
 					int j;
-					evbuffer_add_printf(evb, ", \"locked_by\": [%d", s.blocking_pids[0]);
+					evbuffer_add_printf(evb, ", \"locked_by\": [%d", s.num_blockers == 1 ? (uint32)s.blockers : *(uint32 *)s.blockers);
 					for (j = 1; j < s.num_blockers; ++j)
-						evbuffer_add_printf(evb, ",%d", s.blocking_pids[j]);
+						evbuffer_add_printf(evb, ",%d", ((uint32 *)s.blockers)[j]);
 					evbuffer_add_printf(evb, "]");
 				}
 

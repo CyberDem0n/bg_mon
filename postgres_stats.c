@@ -48,6 +48,7 @@ static pg_stat_list pg_stats_current;
 static pg_stat_list pg_stats_new;
 
 typedef struct {
+	pg_stat		*p;		/* pointer to a corresponding pg_stat entry */
 	uint32		pid;
 #if PG_VERSION_NUM < 90600
 	uint32		field1; /* a 32-bit ID field */
@@ -63,7 +64,7 @@ typedef struct {
 #define IS_GRANTED(l) false
 #else
 #define IS_GRANTED(l) l.granted
-static int lock_cmp(const void *arg1, const void *arg2)
+static int cmp_lock(const void *arg1, const void *arg2)
 {
 	const _lock *l1 = (const _lock *) arg1;
 	const _lock *l2 = (const _lock *) arg2;
@@ -180,7 +181,7 @@ static _lock *get_pg_locks(int *num_locks)
 			}
 		}
 		if ((*num_locks = j) > 1)
-			qsort(locks, *num_locks, sizeof(_lock), lock_cmp);
+			qsort(locks, *num_locks, sizeof(_lock), cmp_lock);
 #endif
 	}
 	return locks;
@@ -206,62 +207,111 @@ static pg_stat *find_pg_proc_by_pid(pg_stat_list pg_stats, uint32 pid)
 	return NULL;
 }
 
-static void update_blockers(pg_stat_list pg_stats, pg_stat *blocked, int blocker_pid)
+static void update_blockers(pg_stat *blocked, pg_stat *blocker)
 {
-	int			i;
-	bool		e = false;
-	pg_stat	   *blocker;
+	blocker->is_blocker = true;
+	if (blocked->blockers)
+		((uint32 *)blocked->blockers)[blocked->num_blockers] = blocker->pid;
+	else
+		blocked->blockers = blocker->pid;
+	blocked->num_blockers++;
+}
 
-	for (i = 0; i < blocked->num_blockers; ++i)
-		if ((e = (blocked->blocking_pids[i] == blocker_pid)))
-			break;
-
-	if (!e && (blocker = find_pg_proc_by_pid(pg_stats, blocker_pid)))
+static void fix_blockers_array(pg_stat *blocked)
+{
+	if (blocked->num_blockers < 2)
 	{
-		blocker->is_blocker = true;
-		if (!blocked->blocking_pids)
-			blocked->blocking_pids = palloc(pg_stats.pos * sizeof(uint32));
-		blocked->blocking_pids[blocked->num_blockers++] = blocker_pid;
+		uint32 tmp = blocked->num_blockers == 1 ? *((uint32 *)blocked->blockers) : 0;
+		pfree((uint32 *)blocked->blockers);
+		blocked->blockers = tmp;
 	}
 }
 
 static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock *locks, int num_locks)
 {
-	int	i, j;
+	int	i, j, k, num_blockers;
 
 	for (i = 0; i < num_locks; i++)
 	{
-		pg_stat		*blocked;
-		_lock		 l = locks[i];
+		_lock		*l = &locks[i];
+#if PG_VERSION_NUM < 90600
+		int			granted = -1;
+#endif
 
-		if (IS_GRANTED(l) || !(blocked = find_pg_proc_by_pid(pg_stats, l.pid)))
+		if (IS_GRANTED((*l)) || !(l->p = find_pg_proc_by_pid(pg_stats, l->pid)))
 			continue;
 
 #if PG_VERSION_NUM < 90600
-		for (j = i + 1; j < num_locks; j++)
+		/* find block of processes waiting for the same resource */
+		for (j = i + 1, num_blockers = 0; j < num_locks; j++)
 		{
-			_lock m = locks[j];
+			_lock *m = &locks[j];
 
-			if (l.type != m.type || l.field1 != m.field1 || l.field2 != m.field2
-					|| l.field3 != m.field3 || l.field4 != m.field4) break;
+			if (l->type != m->type || l->field1 != m->field1 || l->field2 != m->field2
+					|| l->field3 != m->field3 || l->field4 != m->field4) break;
 
-			if (!IS_GRANTED(m)) continue;
-
-			if (l.pid != m.pid)
-				update_blockers(pg_stats, blocked, m.pid);
+			m->p = find_pg_proc_by_pid(pg_stats, m->pid);
+			if (m->p && IS_GRANTED((*m)))
+			{
+				if (granted == -1) granted = j;
+				num_blockers++;
+			}
 		}
+
+		if (granted == -1)
+			goto adjust_i;
+
+		for (k = i; k < granted; k++)
+		{
+			l = &locks[k];
+			if (l->p && !l->p->blockers) /* we assume that process can't wait for more than one lock */
+			{
+				int m;
+
+				if (num_blockers > 1)
+					l->p->blockers = (uintptr_t) palloc(num_blockers * sizeof(uint32));
+
+				for (m = granted; m < j; m++)
+					if (locks[m].p && l->pid != locks[m].pid)
+						update_blockers(l->p, locks[m].p);
+
+				if (num_blockers > 1)
+					fix_blockers_array(l->p);
+			}
+		}
+
+adjust_i:
+		i = j - 1;
 #else
 		{
-			int			  num_blockers;
 			Datum		 *blockers;
 			ArrayType	 *elems;
 			MemoryContext oldcxt = MemoryContextSwitchTo(othercxt);
-			elems = DatumGetArrayTypeP(DirectFunctionCall1(pg_blocking_pids, Int32GetDatum(l.pid)));
+			elems = DatumGetArrayTypeP(DirectFunctionCall1(pg_blocking_pids, Int32GetDatum(l->pid)));
 			deconstruct_array(elems, INT4OID, sizeof(int32), true, 'i', &blockers, NULL, &num_blockers);
 			MemoryContextSwitchTo(oldcxt);
 
+			if (num_blockers > 1)
+				l->p->blockers = (uintptr_t) palloc(num_blockers * sizeof(uint32));
+
 			for (j = 0; j < num_blockers; ++j)
-				update_blockers(pg_stats, blocked, DatumGetInt32(blockers[j]));
+			{
+				bool e = false;
+				int m;
+				pg_stat *blocker;
+
+				if ((k = DatumGetInt32(blockers[j])) == 0) continue;
+
+				for (m = 0; m < l->p->num_blockers; m++)
+					if ((e = (((uint32 *)l->p->blockers)[m] == k)))
+						break;
+
+				if (!e && (blocker = find_pg_proc_by_pid(pg_stats, k)))
+					update_blockers(l->p, blocker);
+			}
+
+			if (num_blockers > 1)
+				fix_blockers_array(l->p);
 		}
 #endif
 	}
@@ -283,7 +333,8 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 		FREE(ps.query);
 		FREE(ps.usename);
 		FREE(ps.datname);
-		FREE(ps.blocking_pids);
+		if (ps.num_blockers > 1)
+			pfree((uint32 *)ps.blockers);
 
 		if (ps.ps.free_cmdline)
 			FREE(ps.ps.cmdline);
@@ -809,15 +860,6 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 	}
 }
 
-static int cmp_int(const void *va, const void *vb)
-{
-	uint32 a = *((const uint32 *) va);
-	uint32 b = *((const uint32 *) vb);
-
-	if (a == b) return 0;
-	return (a > b) ? 1 : -1;
-}
-
 static double calculate_age(TimestampTz ts)
 {
 	double ret = (GetCurrentTimestamp() - ts) / 1000000.0;
@@ -961,9 +1003,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	{
 		pg_stat *ps = pg_stats->values + i;
 		if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
-			if (ps->num_blockers > 1)
-				qsort(ps->blocking_pids, ps->num_blockers, sizeof(uint32), cmp_int);
-
 			if (ps->userid && IsNormalProcessingMode())
 			{
 				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));

@@ -4,28 +4,22 @@ language: c
 compiler: gcc
 matrix:
   include:
-  - addons:
-      postgresql: "9.3"
-  - addons:
-      postgresql: "9.4"
-  - addons:
-      postgresql: "9.5"
-  - addons:
-      postgresql: "9.6"
-  - addons:
-      postgresql: "10"
-      apt:
-        packages:
-          - postgresql-10
+  - env: PG=9.3
+  - env: PG=9.4
+  - env: PG=9.5
+  - env: PG=9.6
+  - env: PG=10
+  - env: PG=11
 before_install:
-  - sudo apt-get update
-  - version=$(postgres -V | sed -n 's/^.* \([1-9][0-9]*\(\.[0-9]*\)\{0,2\}\).*/\1/p')
-  - version=${version%.*}
-  - sudo apt-get install -y postgresql-server-dev-$version libevent-dev pv
+  - sudo pg_dropcluster --stop 9.2 main
+  - sudo service postgresql stop
+  - sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
+  - if ! sudo -E apt-get -yq --no-install-suggests --no-install-recommends $(travis_apt_get_options) install postgresql-$PG postgresql-server-dev-$PG libevent-dev pv; then echo; fi
   - sudo pip install --upgrade cpp-coveralls
 script:
   - |
     set -e
+    export PATH=/usr/lib/postgresql/$PG/bin:$PATH
     sudo make USE_PGXS=1 ENABLE_GCOV=1 install
     bash -x test.sh
     if grep -E '(ERROR|FATAL)' test_cluster?/*log/postgresql*.log | grep -Ev '(no COPY in progress|could not connect to|could not send|database system is shutting|database system is starting up)'; then exit 1; fi
