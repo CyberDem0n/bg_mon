@@ -426,7 +426,7 @@ static unsigned char find_or_add_device(device_stats *devices, const char *name)
 			goto resolve_hierarchy;
 		}
 
-	if (new_id == -1 && (new_id = devices->size++) >= devices->len)
+	if ((new_id = devices->size++) >= devices->len)
 		devices->values = repalloc(devices->values, sizeof(device_stat)*(devices->len = devices->size));
 
 	memset(devices->values + new_id, 0, sizeof(device_stat));
