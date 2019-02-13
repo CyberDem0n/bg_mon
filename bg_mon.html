@@ -30,6 +30,10 @@ table > tbody > tr > td {
 	text-align: right;
 }
 
+table > tbody > tr > td#processes\.locked_by {
+	text-align: left;
+}
+
 table > thead > tr > th {
 	border-bottom: 2px solid #ddd;
 	vertical-align: bottom;
@@ -270,7 +274,7 @@ function humanReadableTimeInterval(data) {
 }
 
 function sort_processes(data) {
-	var blocked = {};
+	var blockers = {};
 	var children = {};
 	var running = [];
 	for (var i = 0; i < data.length; ++i) {
@@ -281,10 +285,10 @@ function sort_processes(data) {
 				children[data[i]['parent_pid']] = [data[i]];
 		} else if ('locked_by' in data[i]) {
 			blocked_pid = data[i]['locked_by'][0];
-			if (blocked_pid in blocked)
-				blocked[blocked_pid].push(data[i]);
+			if (blocked_pid in blockers)
+				blockers[blocked_pid].push(data[i]);
 			else
-				blocked[blocked_pid] = [data[i]];
+				blockers[blocked_pid] = [data[i]];
 		} else running.push(data[i]);
 	}
 
@@ -296,16 +300,18 @@ function sort_processes(data) {
 		return b - a;
 	};
 
+	var blocked_sort = function(a, b) {
+		var ret = a['locked_by'].length - b['locked_by'].length;
+		if (ret == 0) ret = age_sort(a, b);
+		return ret;
+	}
+
 	running.sort(age_sort);
 
-	if (Object.getOwnPropertyNames(blocked).length == 0 && Object.getOwnPropertyNames(children).length == 0)
+	if (Object.getOwnPropertyNames(blockers).length == 0 && Object.getOwnPropertyNames(children).length == 0)
 		return running;
 
 	var ret = [];
-	var blocked_temp = [];
-
-	for (var key in blocked)
-		blocked[key].sort(age_sort);
 
 	for (var key in children)
 		children[key].sort(age_sort);
@@ -314,23 +320,27 @@ function sort_processes(data) {
 		ret.push(r = running[r]);
 		if (r['pid'] in children) {
 			while (children[r['pid']].length > 0) {
-				var child_row = children[r['pid']].pop();
+				var child_row = children[r['pid']].shift();
 				if (!('query' in child_row))
 					child_row['query'] = r['query'];
 				child_row['query'] = child_row['parent_pid'] + ': ' + child_row['query'];
 				ret.push(child_row);
 			}
-		} else if (r['pid'] in blocked) {
-			Array.prototype.push.apply(blocked_temp, blocked[r['pid']]);
-			delete blocked[r['pid']];
+		} else if (r['pid'] in blockers) {
+			var blocked_temp = [];
+			var blocked_ret = [];
+			Array.prototype.push.apply(blocked_temp, blockers[r['pid']]);
+			delete blockers[r['pid']];
 			while (blocked_temp.length > 0) {
-				var child_row = blocked_temp.pop();
-				ret.push(child_row);
-				if (child_row['pid'] in blocked) {
-					Array.prototype.push.apply(blocked_temp, blocked[child_row['pid']]);
-					delete blocked[child_row['pid']];
+				var child_row = blocked_temp.shift();
+				blocked_ret.push(child_row);
+				if (child_row['pid'] in blockers) {
+					Array.prototype.push.apply(blocked_temp, blockers[child_row['pid']]);
+					delete blockers[child_row['pid']];
 				}
 			}
+			blocked_ret.sort(blocked_sort);
+			Array.prototype.push.apply(ret, blocked_ret);
 		}
 	}
 	return ret;

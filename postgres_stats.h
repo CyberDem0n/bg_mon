@@ -84,7 +84,7 @@ typedef struct {
 	PgBackendType type;
 	BackendState state;
 	bool is_blocker;
-	uint32 *blocking_pids;
+	uintptr_t blockers;
 	uint32 num_blockers;
 	pid_t parent_pid;
 	char *query;
