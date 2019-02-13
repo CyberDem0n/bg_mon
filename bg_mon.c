@@ -21,6 +21,7 @@
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
+#include "safety_funcs.h"
 #include "net_stats.h"
 #include "postgres_stats.h"
 #include "disk_stats.h"
@@ -328,7 +329,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	struct evbuffer *evb = evbuffer_new();
 
 	if (strncmp(uri, "/ui", 3)) {
-		if (!(err = system_stats_current.uptime == 0)) {
+		if (!(err = (system_stats_current.uptime == 0))) {
 			prepare_statistics_output(evb);
 			evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", "application/json");
 		}
@@ -391,37 +392,39 @@ bg_mon_main(Datum main_arg)
 
 	initialize_bg_mon();
 	evthread_use_pthreads();
+	event_set_mem_functions(malloc_fn, realloc_fn, free);
 
 restart:
 	FREE(bg_mon_listen_address);
-	if (!(bg_mon_listen_address = palloc(strlen(bg_mon_listen_address_guc) + 1))) {
-		elog(ERROR, "Couldn't allocate memory for bg_mon_listen_address: exiting");
-		return proc_exit(1);
-	}
-
+	bg_mon_listen_address = palloc(strlen(bg_mon_listen_address_guc) + 1);
 	strcpy(bg_mon_listen_address, bg_mon_listen_address_guc);
+
 	bg_mon_port = bg_mon_port_guc;
 
-	if (!(base = event_base_new())) {
-		elog(ERROR, "Couldn't create an event_base: exiting");
-		return proc_exit(1);
-	}
+	if (!(base = event_base_new()))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 errmsg("Couldn't create an event_base"),
+				 errdetail("event_base_new() returned NULL")));
 
 	/* Create a new evhttp object to handle requests. */
-	if (!(http = evhttp_new(base))) {
-		elog(ERROR, "couldn't create evhttp. Exiting.");
-		return proc_exit(1);
-	}
+	if (!(http = evhttp_new(base)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 errmsg("Couldn't create an evhttp"),
+				 errdetail("evhttp_new() returned NULL")));
+
 
 	/* We want to accept arbitrary requests, so we need to set a "generic"
 	 * cb.  We can also add callbacks for specific paths. */
 	evhttp_set_gencb(http, send_document_cb, NULL);
 
 	/* Now we tell the evhttp what port to listen on */
-	if (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port))) {
-		elog(ERROR, "couldn't bind to %s:%d. Exiting.", bg_mon_listen_address, bg_mon_port);
-		return proc_exit(1);
-	}
+	if (!(handle = evhttp_bind_socket_with_handle(http, bg_mon_listen_address, bg_mon_port)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 errmsg("evhttp_bind_socket_with_handle() failed"),
+				 errdetail("couldn't bind to %s:%d", bg_mon_listen_address, bg_mon_port)));
 
 	pthread_mutex_init(&lock, NULL);
 
