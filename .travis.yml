@@ -15,6 +15,8 @@ before_install:
   - sudo service postgresql stop
   - sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
   - if ! sudo -E apt-get -yq --no-install-suggests --no-install-recommends $(travis_apt_get_options) install postgresql-$PG postgresql-server-dev-$PG libevent-dev pv; then echo; fi
+  - for n in 1 -dev; do wget https://launchpad.net/ubuntu/+archive/primary/+files/libbrotli${n}_1.0.3-1ubuntu1.2_amd64.deb; done
+  - sudo dpkg -i libbrotli*.deb
   - sudo pip install --upgrade cpp-coveralls
 script:
   - |
