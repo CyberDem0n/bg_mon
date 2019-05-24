@@ -73,6 +73,7 @@ function curl_ps_loop() {
             ps auxwwwf | grep postgres
         fi
     done
+    curl -s http://localhost:$(($bport+$1))
     for a in $(seq -f '%02g' 0 19); do
         curl -s http://localhost:$(($bport+$1))/$a > /dev/null
     done
