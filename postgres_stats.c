@@ -981,11 +981,11 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	if (init_postgres)
 	{
 #if PG_VERSION_NUM >= 110000
-		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, NULL, false);
 #elif PG_VERSION_NUM >= 90500
-		InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL);
+		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, NULL);
 #else
-		InitPostgres(NULL, InvalidOid, NULL, NULL);
+		InitPostgres("postgres", InvalidOid, NULL, NULL);
 #endif
 		SetProcessingMode(NormalProcessing);
 		MemoryContextSwitchTo(oldcxt);
