@@ -66,7 +66,7 @@ bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
 
 function curl_ps_loop() {
     for a in $(seq 1 $2); do
-        curl -s http://localhost:$(($bport+$1))
+        curl -s -H "Accept-Encoding: br" http://localhost:$(($bport+$1)) | brotli -d
         echo
         sleep 1
 	if [[ ! -z "$3" ]]; then
