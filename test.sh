@@ -41,7 +41,7 @@ function start_postgres() {
 }
 
 function create_cluster() {
-    initdb test_cluster$1
+    initdb -k test_cluster$1
     echo "host replication all 127.0.0.1/32 trust
 host replication all ::1/128 trust" >> test_cluster$1/pg_hba.conf
     echo "unix_socket_directories = '.'

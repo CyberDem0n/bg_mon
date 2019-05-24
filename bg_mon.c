@@ -71,7 +71,7 @@ static bool accept_brotli(const struct evkeyvalq *input_headers)
 		const char *p;
 		if (len > 1 && (p = strcasestr(accept_encoding, "br"))) {
 			return (p == accept_encoding || *(p - 1) == ',' || *(p - 1) == ' ')
-				&& (p + 2 == accept_encoding + len || *(p + 2) == ',' || *(p + 2) == ' ' || *(p + 2) == ',');
+				&& (p + 2 == accept_encoding + len || *(p + 2) == ',' || *(p + 2) == ' ');
 		}
 	}
 	return false;
@@ -346,7 +346,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	const struct evkeyvalq *input_headers = evhttp_request_get_input_headers(req);
 	if (strlen(uri) == 3 && uri[0] == '/' && uri[1] >= '0' && uri[1] <= '9' && uri[2] >= '0' && uri[2] <= '9') {
 		int bucket = 10 * (uri[1] - '0') + uri[2] - '0';
-		if (bucket >=0 && bucket < num_buckets) {
+		if (bucket < num_buckets) {
 			struct aggregated_stats *agg = aggregated + bucket;
 			if ((time(NULL) - agg->minute)/60 <= num_buckets) {
 				struct evbuffer *evb = evbuffer_new();
@@ -369,7 +369,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 			struct evbuffer *evb = evbuffer_new();
 #if HAS_LIBBROTLI
 			if (accept_brotli(input_headers)) {
-				struct compression_state *state = malloc(sizeof(struct compression_state));
+				struct compression_state *state = malloc_fn(sizeof(struct compression_state));
 				state->to = NULL;
 				state->len = 0;
 				brotli_init(state, 7);
@@ -455,15 +455,17 @@ static void update_statistics(struct timeval time)
 	net_stats n = get_net_stats();
 
 	struct evbuffer *evb = prepare_statistics_output(time, s, p, d, n);
+	struct evbuffer *old;
 
 	pthread_mutex_lock(&lock);
 
-	if (evbuffer != NULL)
-		evbuffer_free(evbuffer);
-
+	old = evbuffer;
 	evbuffer = evb;
 
 	pthread_mutex_unlock(&lock);
+
+	if (old != NULL)
+		evbuffer_free(old);
 
 	update_aggregated_statistics(time.tv_sec);
 }
@@ -522,7 +524,6 @@ restart:
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 				 errmsg("Couldn't create an evhttp"),
 				 errdetail("evhttp_new() returned NULL")));
-
 
 	/* We want to accept arbitrary requests, so we need to set a "generic"
 	 * cb.  We can also add callbacks for specific paths. */

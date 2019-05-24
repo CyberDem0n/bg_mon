@@ -254,7 +254,7 @@ static char *get_device(List *mounts, const char *path)
 					me->me_dev = disk_stats.st_dev;
 				else {
 					if (errno == EIO)
-						elog(ERROR, "Can't stat on %s", me->me_mountdir);
+						elog(WARNING, "Can't stat on %s", me->me_mountdir);
 					/* So we won't try and fail repeatedly. */
 					me->me_dev = (dev_t) -2;
 				}

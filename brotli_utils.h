@@ -14,11 +14,11 @@ struct compression_state {
 	bool is_finished;
 };
 
-bool brotli_init(struct compression_state *state, int quality);
+void brotli_init(struct compression_state *state, int quality);
 
-bool brotli_compress_evbuffer(struct compression_state *state, struct evbuffer *from, BrotliEncoderOperation op);
+void brotli_compress_evbuffer(struct compression_state *state, struct evbuffer *from, BrotliEncoderOperation op);
 
-bool brotli_compress_data(struct compression_state *state, const unsigned char *next_in, size_t avail_in, BrotliEncoderOperation op);
+void brotli_compress_data(struct compression_state *state, const unsigned char *next_in, size_t avail_in, BrotliEncoderOperation op);
 
 void brotli_dealloc(struct compression_state *state);
 
