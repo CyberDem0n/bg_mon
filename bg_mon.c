@@ -217,11 +217,11 @@ static void prepare_statistics_output(struct evbuffer *evb)
 	evbuffer_add_printf(evb, ", \"total\": %d, ", pg_stats_current.total_connections);
 	evbuffer_add_printf(evb, "\"active\": %d}, \"start_time\": %lu}, ", pg_stats_current.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\": {\"uptime\": %d, \"load_average\": ", (int)(s.uptime / SC_CLK_TCK));
-	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g], \"cpu\": ", la.run_1min, la.run_5min, la.run_15min);
-	evbuffer_add_printf(evb, "{\"user\": %2.1f, \"system\": %2.1f, \"idle\": ", c.utime_diff, c.stime_diff);
-	evbuffer_add_printf(evb, "%2.1f, \"iowait\": %2.1f}, \"ctxt\": %lu", c.idle_diff, c.iowait_diff, s.ctxt_diff);
-	evbuffer_add_printf(evb, ", \"processes\": {\"running\": %lu, \"blocked\": %lu}, ", s.procs_running, s.procs_blocked);
-	evbuffer_add_printf(evb, "\"memory\": {\"total\": %lu, \"free\": %lu, ", m.total, m.free);
+	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g], \"cpu\": {\"user\": ", la.run_1min, la.run_5min, la.run_15min);
+	evbuffer_add_printf(evb, "%2.1f, \"nice\":  %2.1f, \"system\": %2.1f, ", c.utime_diff, c.ntime_diff, c.stime_diff);
+	evbuffer_add_printf(evb, "\"idle\": %2.1f, \"iowait\": %2.1f, \"steal\": %2.1f", c.idle_diff, c.iowait_diff, c.steal_diff);
+	evbuffer_add_printf(evb, "}, \"ctxt\": %lu, \"processes\": {\"running\": %lu, \"blocked\":", s.ctxt_diff, s.procs_running);
+	evbuffer_add_printf(evb, " %lu}, \"memory\": {\"total\": %lu, \"free\": %lu, ", s.procs_blocked, m.total, m.free);
 	evbuffer_add_printf(evb, "\"buffers\": %lu, \"cached\": %lu, \"dirty\": %lu", m.buffers, m.cached, m.dirty);
 
 	if (m.overcommit.memory == 2) {
@@ -229,10 +229,20 @@ static void prepare_statistics_output(struct evbuffer *evb)
 		evbuffer_add_printf(evb, "\"commit_limit\": %lu, \"committed_as\": %lu}", m.limit, m.as);
 	}
 
-	if (m.cgroup.available) {
+	if (m.cgroup.available || c.cgroup.available) {
 		cgroup_memory cm = m.cgroup;
-		evbuffer_add_printf(evb, ", \"cgroup\": {\"limit\": %lu, \"usage\": %lu", cm.limit, cm.usage);
-		evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu}", cm.rss, cm.cache);
+		cgroup_cpu cc = c.cgroup;
+		evbuffer_add_printf(evb, "}}, \"cgroup\": {");
+		if (cm.available) {
+			evbuffer_add_printf(evb, "\"memory\": {\"limit\": %lu, \"usage\": %lu", cm.limit, cm.usage);
+			evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu", cm.rss, cm.cache);
+			if (cc.available)
+				evbuffer_add_printf(evb, "}, ");
+		}
+		if (cc.available) {
+			evbuffer_add_printf(evb, "\"cpu\": {\"shares\": %llu, \"quota\": %lld", cc.shares, cc.quota);
+			evbuffer_add_printf(evb, ", \"user\": %2.1f, \"system\": %2.1f", cc.user_diff, cc.system_diff);
+		}
 	}
 
 	evbuffer_add_printf(evb, "}}, \"disk_stats\": {");
