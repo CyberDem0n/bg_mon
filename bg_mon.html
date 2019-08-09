@@ -384,6 +384,9 @@ function apply(data, ns) {
 			if (el != null) el.style.display = 'none';
 		} else
 			set_diskstats_values(data, 'wal');
+
+		var el = document.getElementById('cgroup_enabled');
+		if (el != null) el.style.display = 'cgroup' in data ? '' : 'none';
 	}
 
 	for (var key in data) {
@@ -402,6 +405,13 @@ function apply(data, ns) {
 					data[key]['used'] = data[key]['total'] - data[key]['free'];
 					if (data[key]['used'] > data[key]['cache'])
 						data[key]['used'] -= data[key]['cache'];
+
+					var overcommit_display = 'overcommit' in data[key] ? 'inline' : 'none';
+					var els = ['tmpl', 'enabled'];
+					for (var n = 0; n < els.length; ++n) {
+						var el = document.getElementById(ns_key + '.overcommit_' + els[n]);
+						if (el != null) el.style.display = overcommit_display;
+					}
 				}
 				for (var n in timeSeries[cn])
 					timeSeries[cn][n].append(t, data[key][n]);
@@ -476,9 +486,9 @@ Prism.languages.sql={comment:{pattern:/(^|[^\\])(?:\/\*[\s\S]*?\*\/|(?:--|\/\/|#
 				<span style="color: black">Total <b id="system_stats.memory.total"></b></span>
 				<span style="color: blue">Used <b id="system_stats.memory.used"></b></span>
 				<span style="color: green">Free <b id="system_stats.memory.free"></b></span>
-				<span style="color: orange">Buffers+Cache <b id="system_stats.memory.cache"></b></span><br>
+				<span style="color: orange">Buffers+Cache <b id="system_stats.memory.cache"></b></span><br id="system_stats.memory.overcommit_enabled">
 				<span style="color: black">Dirty <b id="system_stats.memory.dirty"></b></span>
-				<span style="color: black">Limit <b id="system_stats.memory.overcommit.commit_limit"></b> as <b id="system_stats.memory.overcommit.committed_as"></b></span>
+				<div id="system_stats.memory.overcommit_tmpl"><span style="color: black">Limit <b id="system_stats.memory.overcommit.commit_limit"></b> as <b id="system_stats.memory.overcommit.committed_as"></b></span></div>
 			</td>
 			<td>
 				<span style="color: black">data/<b id="io.data_dev"></b>:</span>
@@ -497,6 +507,20 @@ Prism.languages.sql={comment:{pattern:/(^|[^\\])(?:\/\*[\s\S]*?\*\/|(?:--|\/\/|#
 					<span style="color: black">Await: <b id="io.wal_await"></b></span>
 					<span style="color: black">%Util: <b id="io.wal_util"></b></span>
 				</div>
+			</td>
+		</tr>
+		<tr id="cgroup_enabled">
+			<td><b>cgroup Mem:</b>
+				<span>RSS: <b id="cgroup.memory.rss"></b></span>
+				<span>Cache: <b id="cgroup.memory.cache"></b></span>
+				<span>Usage: <b id="cgroup.memory.usage"></b></span>
+				<span>Limit: <b id="cgroup.memory.limit"></b></span>
+			</td>
+			<td><b>cgroup CPU:</b>
+				<span>User: <b id="cgroup.cpu.user"></b>%</span>
+				<span>System: <b id="cgroup.cpu.system"></b>%</span>
+				<span>Shares: <b id="cgroup.cpu.shares"></b></span>
+				<span>Quota: <b id="cgroup.cpu.quota"></b></span>
 			</td>
 		</tr>
 	</thead>
