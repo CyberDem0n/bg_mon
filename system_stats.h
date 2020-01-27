@@ -30,6 +30,7 @@ typedef struct {
 	unsigned long rss;
 	unsigned long cache;
 	unsigned long dirty;
+	unsigned long oom_kill;
 } cgroup_memory;
 
 typedef struct {

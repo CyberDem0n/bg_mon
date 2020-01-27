@@ -130,6 +130,16 @@ static cgroup_memory read_cgroup_memory_stats(void)
 
 	cm.usage = MAXIMUM(cm.usage - total_inactive_file, 0);
 
+	/* get the number of times oom was triggered for the cgroup */
+	strcpy(memory_cgroup + memory_cgroup_len, "oom_control");
+	if ((csfd = fopen(memory_cgroup, "r")) == NULL)
+		return cm;
+
+	while (fgets(buf, sizeof(buf), csfd))
+		if (sscanf(buf, "oom_kill %lu", &cm.oom_kill) == 1)
+			break;
+	fclose(csfd);
+
 	return cm;
 }
 

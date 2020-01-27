@@ -235,7 +235,8 @@ static void prepare_statistics_output(struct evbuffer *evb)
 		evbuffer_add_printf(evb, "}}, \"cgroup\": {");
 		if (cm.available) {
 			evbuffer_add_printf(evb, "\"memory\": {\"limit\": %lu, \"usage\": %lu", cm.limit, cm.usage);
-			evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu, \"dirty\": %lu", cm.rss, cm.cache, cm.dirty);
+			evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu", cm.rss, cm.cache);
+			evbuffer_add_printf(evb, ", \"dirty\": %lu, \"oom_kill\": %lu", cm.dirty, cm.oom_kill);
 			if (cc.available)
 				evbuffer_add_printf(evb, "}, ");
 		}
