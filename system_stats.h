@@ -29,6 +29,7 @@ typedef struct {
 	unsigned long usage;
 	unsigned long rss;
 	unsigned long cache;
+	unsigned long dirty;
 } cgroup_memory;
 
 typedef struct {

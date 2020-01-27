@@ -95,18 +95,20 @@ static cgroup_memory read_cgroup_memory_stats(void)
 	int i = 0, j = 0;
 	cgroup_memory cm = {0,};
 	char name[6], buf[255];
-	unsigned long value;
+	unsigned long value, total_inactive_file = 0;
 	struct _mem_tab {
 		const char *name;
 		unsigned long *value;
 	} mem_tab[] = {
-		{"cache", &cm.cache},
-		{"rss", &cm.rss},
+		{"hierarchical_memory_limit", &cm.limit},
+		{"total_cache", &cm.cache},
+		{"total_rss", &cm.rss},
+		{"total_dirty", &cm.dirty},
+		{"total_inactive_file", &total_inactive_file},
 		{NULL, NULL}
 	};
 
 	cm.available = true;
-	cm.limit = cgroup_read_ulong("limit_in_bytes") / 1024;
 	cm.usage = cgroup_read_ulong("usage_in_bytes") / 1024;
 
 	strcpy(memory_cgroup + memory_cgroup_len, "stat");
@@ -115,7 +117,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 
 	while (i < lengthof(mem_tab) - 1
 			&& fgets(buf, sizeof(buf), csfd)
-			&& sscanf(buf, "%5s %lu", name, &value) == 2) {
+			&& sscanf(buf, "%25s %lu", name, &value) == 2) {
 		for (j = 0; mem_tab[j].name != NULL; ++j) {
 			if (strcmp(mem_tab[j].name, name) == 0) {
 				++i;
@@ -125,6 +127,8 @@ static cgroup_memory read_cgroup_memory_stats(void)
 		}
 	}
 	fclose(csfd);
+
+	cm.usage = MAXIMUM(cm.usage - total_inactive_file, 0);
 
 	return cm;
 }
