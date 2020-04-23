@@ -22,6 +22,7 @@
 #include "utils/timestamp.h"
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
+#include "storage/procarray.h"
 
 #include "system_stats.h"
 #include "postgres_stats.h"
@@ -696,8 +697,18 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
 }
 
+#define PROCESS_PATTERN " process"
+
+#if PG_VERSION_NUM >= 130000
+	#define SUFFIX_PATTERN ""
+	#define UNKNOWN_PROC_NAME UNKNOWN_NAME
+#else
+	#define SUFFIX_PATTERN "  "
+	#define UNKNOWN_PROC_NAME "???" PROCESS_PATTERN SUFFIX_PATTERN
+#endif
+
 #define PARALLEL_WORKER_PROC_NAME PARALLEL_WORKER_NAME " for PID"
-#define LOGICAL_LAUNCHER_PROC_NAME LOGICAL_LAUNCHER_NAME "  "
+#define LOGICAL_LAUNCHER_PROC_NAME LOGICAL_LAUNCHER_NAME SUFFIX_PATTERN
 #define LOGICAL_WORKER_PROC_NAME LOGICAL_WORKER_NAME " for"
 
 #define BACKEND_ENTRY(CMDLINE_PATTERN, TYPE) TAB_ENTRY(CMDLINE_PATTERN " ", PG_##TYPE)
@@ -711,7 +722,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 	#define BG_WRITER_PROC_NAME "writer"
 	#define BG_WORKER_PROC_NAME "bgworker:"
 
-	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE) " process"
+	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE) PROCESS_PATTERN
 	#define BGWORKER(TYPE) BACKEND_ENTRY(CMDLINE(BG_WORKER) " " CMDLINE(TYPE), TYPE)
 #else
 	#define WAL_RECEIVER_PROC_NAME WAL_RECEIVER_NAME
@@ -722,7 +733,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE)
 	#define BGWORKER(TYPE) OTH_BACKEND(TYPE)
 #endif
-#define AUX_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE_PATTERN(TYPE) "  ", TYPE)
+#define AUX_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE_PATTERN(TYPE) SUFFIX_PATTERN, TYPE)
 
 static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 {
@@ -742,9 +753,13 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			BACKEND_ENTRY(CMDLINE_PATTERN(WAL_SENDER), WAL_SENDER),
 			AUX_BACKEND(AUTOVAC_LAUNCHER),
 			AUX_BACKEND(AUTOVAC_WORKER),
+#if PG_VERSION_NUM >= 90600
 			BGWORKER(PARALLEL_WORKER),
+#endif
+#if PG_VERSION_NUM >= 100000
 			BGWORKER(LOGICAL_LAUNCHER),
 			BGWORKER(LOGICAL_WORKER),
+#endif
 #if PG_VERSION_NUM < 110000
 			OTH_BACKEND(BG_WORKER),
 #endif
@@ -766,8 +781,8 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 
 #if PG_VERSION_NUM >= 110000
 		if (backend_tab[j].name == NULL) {
-			size_t len = strlen(cmd);
-			if (len > 3 && strcmp(cmd + len - 3, "   ") == 0) {
+			size_t len = strlen(cmd) - sizeof(SUFFIX_PATTERN);
+			if (len > 0 && strcmp(cmd + len, " " SUFFIX_PATTERN) == 0) {
 				type = PG_BG_WORKER;
 				*rest = cmd;
 			}
@@ -797,6 +812,7 @@ static void read_proc_cmdline(pg_stat *stat)
 		PgBackendType type = parse_cmdline(buf, &rest);
 
 		stat->type = type;
+
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
 				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest) {
 			if (type == PG_WAL_SENDER && stat->usename) {
@@ -806,7 +822,7 @@ static void read_proc_cmdline(pg_stat *stat)
 			}
 			stat->query = json_escape_string(rest);
 		} else if ((type == PG_LOGICAL_WORKER || type == PG_BG_WORKER) && *rest)
-			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - 3);
+			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - sizeof(SUFFIX_PATTERN));
 		else if (type == PG_PARALLEL_WORKER && *rest)
 			stat->parent_pid = strtoul(rest, NULL, 10);
 	}
@@ -899,6 +915,9 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 #endif
 				&& beentry->st_procpid != MyProcPid)
 		{
+#if PG_VERSION_NUM >= 90600
+			PGPROC *proc;
+#endif
 			pg_stat ps = {0, };
 
 			ps.pid = beentry->st_procpid;
@@ -938,15 +957,21 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				ps.age = calculate_age(beentry->st_activity_start_timestamp);
 			else ps.age = -1;
 
-#if PG_VERSION_NUM >= 100000
-
-			ps.type = beentry->st_backendType == B_BG_WORKER ? PG_UNDEFINED : beentry->st_backendType;
-#else
 #if PG_VERSION_NUM >= 90600
-			/* hacky way to distinguish between normal backend and parallel worker */
-			if (beentry->st_state == STATE_UNDEFINED && beentry->st_state_start_timestamp == 0
-					&& beentry->st_activity_start_timestamp == 0 && ps.age != -1)
-				ps.type = PG_UNDEFINED;
+			proc = BackendPidGetProc(beentry->st_procpid);
+#if PG_VERSION_NUM >= 100000
+			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
+				proc = AuxiliaryPidGetProc(beentry->st_procpid);
+
+			ps.type = beentry->st_backendType == B_BG_WORKER ? PG_UNDEFINED : (beentry->st_backendType + 1 - B_AUTOVAC_LAUNCHER);
+#endif
+			if (proc != NULL && proc->lockGroupLeader && proc->lockGroupLeader->pid != ps.pid) {
+				ps.parent_pid = proc->lockGroupLeader->pid;
+				ps.type = PG_PARALLEL_WORKER;
+			}
+#endif
+#if PG_VERSION_NUM < 100000
+#if PG_VERSION_NUM >= 90600
 			else
 #endif
 			{

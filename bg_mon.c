@@ -142,7 +142,7 @@ static const char *process_type(pg_stat p)
 
 	char *backend_names[] = {
 		NULL,
-		QUOTE(UNKNOWN_PROC_NAME),
+		QUOTE(UNKNOWN_NAME),
 		QUOTE(AUTOVAC_LAUNCHER_PROC_NAME),
 		QUOTE(AUTOVAC_WORKER_PROC_NAME),
 		QUOTE(BACKEND_PROC_NAME),
@@ -154,8 +154,8 @@ static const char *process_type(pg_stat p)
 		QUOTE(WAL_SENDER_NAME),
 		QUOTE(WAL_WRITER_NAME),
 		QUOTE(ARCHIVER_PROC_NAME),
-		QUOTE(LOGGER_PROC_NAME),
 		QUOTE(STATS_COLLECTOR_PROC_NAME),
+		QUOTE(LOGGER_PROC_NAME),
 		QUOTE(PARALLEL_WORKER_NAME),
 		QUOTE(LOGICAL_LAUNCHER_NAME),
 		QUOTE(LOGICAL_WORKER_NAME)
@@ -164,7 +164,7 @@ static const char *process_type(pg_stat p)
 	if (p.type == PG_BG_WORKER)
 		return p.ps.cmdline;
 
-	return backend_names[p.type + 2];
+	return backend_names[p.type + 1];
 }
 
 static const char *get_query(pg_stat s)
