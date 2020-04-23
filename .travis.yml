@@ -1,5 +1,5 @@
 sudo: true
-dist: trusty
+dist: bionic
 language: c
 compiler: gcc
 matrix:
@@ -10,8 +10,8 @@ matrix:
   - env: PG=9.6
   - env: PG=10
   - env: PG=11
+  - env: PG=12
 before_install:
-  - sudo pg_dropcluster --stop 9.2 main
   - sudo service postgresql stop
   - sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
   - if ! sudo -E apt-get -yq --no-install-suggests --no-install-recommends $(travis_apt_get_options) install postgresql-$PG postgresql-server-dev-$PG libevent-dev pv; then echo; fi
