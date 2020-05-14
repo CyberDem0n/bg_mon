@@ -55,12 +55,13 @@ static int bg_mon_port = 8080;
 
 static struct evbuffer *evbuffer = NULL;
 #ifdef HAS_LIBBROTLI
+static int bg_mon_num_buckets = 20;
 static pthread_mutex_t agg_lock;
-static struct aggregated_stats {
+struct aggregated_stats {
 	time_t minute;
 	struct compression_state state;
-} aggregated[20] = {0,};
-static const int num_buckets = sizeof(aggregated)/sizeof(struct aggregated_stats);
+};
+static struct aggregated_stats *aggregated;
 static time_t prev_minute = 0;
 
 static bool accepts_brotli(struct evhttp_request *req)
@@ -367,11 +368,11 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	const char *uri = evhttp_request_get_uri(req);
 	struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
 #ifdef HAS_LIBBROTLI
-	int bucket = parse_bucket_request(uri);
-	if (bucket > -1) {
-		if (bucket < num_buckets) {
+	int bucket;
+	if (bg_mon_num_buckets > 0 && (bucket = parse_bucket_request(uri)) > -1) {
+		if (bucket < bg_mon_num_buckets) {
 			struct aggregated_stats *agg = aggregated + bucket;
-			if ((time(NULL) - agg->minute)/60 <= num_buckets) {
+			if ((time(NULL) - agg->minute)/60 <= bg_mon_num_buckets) {
 				struct evbuffer *evb = evbuffer_new();
 				pthread_mutex_lock(&agg_lock);
 				if (!agg->state.is_flushed && !agg->state.is_finished)
@@ -438,9 +439,9 @@ static void *webapi(void *arg)
 	return (void *)0;
 }
 
+#ifdef HAS_LIBBROTLI
 static void update_aggregated_statistics(time_t time)
 {
-#ifdef HAS_LIBBROTLI
 	struct tm *tm = gmtime(&time);
 	time_t minute = time - tm->tm_sec;
 	struct aggregated_stats *agg;
@@ -448,7 +449,7 @@ static void update_aggregated_statistics(time_t time)
 	if (prev_minute == 0)
 		prev_minute = minute - (tm->tm_sec == 0 ? 60 : 0);
 
-	agg = aggregated + (prev_minute/60) % num_buckets;
+	agg = aggregated + (prev_minute/60) % bg_mon_num_buckets;
 
 	pthread_mutex_lock(&agg_lock);
 	if (agg->minute != prev_minute) {
@@ -467,8 +468,8 @@ static void update_aggregated_statistics(time_t time)
 	pthread_mutex_unlock(&agg_lock);
 
 	prev_minute = minute;
-#endif
 }
+#endif
 
 static void update_statistics(struct timeval time)
 {
@@ -489,8 +490,10 @@ static void update_statistics(struct timeval time)
 
 	if (old != NULL)
 		evbuffer_free(old);
-
-	update_aggregated_statistics(time.tv_sec);
+#ifdef HAS_LIBBROTLI
+	if (bg_mon_num_buckets > 0)
+		update_aggregated_statistics(time.tv_sec);
+#endif
 }
 
 void
@@ -511,6 +514,10 @@ bg_mon_main(Datum main_arg)
 													ALLOCSET_SMALL_INITSIZE, ALLOCSET_SMALL_MAXSIZE);
 #endif
 	MemoryContextSwitchTo(bg_mon_cxt);
+
+#ifdef HAS_LIBBROTLI
+	aggregated = palloc0(bg_mon_num_buckets * sizeof(struct aggregated_stats));
+#endif
 
 	pg_start_time = timestamptz_to_time_t(PgStartTime);
 
@@ -621,7 +628,6 @@ restart:
 #ifdef HAS_LIBBROTLI
 				pthread_mutex_destroy(&agg_lock);
 #endif
-
 				evhttp_free(http);
 				event_base_free(base);
 				goto restart;
@@ -680,6 +686,20 @@ _PG_init(void)
 							NULL,
 							NULL,
 							NULL);
+#ifdef HAS_LIBBROTLI
+	DefineCustomIntVariable("bg_mon.history_buckets",
+							"The number of buckets to keep aggregated historic data",
+							NULL,
+							&bg_mon_num_buckets,
+							20,
+							0,
+							1440,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+#endif
 
 	if (!process_shared_preload_libraries_in_progress)
 		return;
