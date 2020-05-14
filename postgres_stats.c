@@ -812,7 +812,6 @@ static void read_proc_cmdline(pg_stat *stat)
 		PgBackendType type = parse_cmdline(buf, &rest);
 
 		stat->type = type;
-
 		if ((type == PG_WAL_RECEIVER || type == PG_WAL_SENDER
 				|| type == PG_ARCHIVER || type == PG_STARTUP) && *rest) {
 			if (type == PG_WAL_SENDER && stat->usename) {
