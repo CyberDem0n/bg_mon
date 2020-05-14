@@ -5,6 +5,14 @@
 
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
 
+extern char *cpu_cgroup_mount;
+static char *cpu_cgroup = NULL;
+static int cpu_cgroup_len = 0;
+
+extern char *cpuacct_cgroup_mount;
+static char *cpuacct_cgroup = NULL;
+static int cpuacct_cgroup_len = 0;
+
 extern char *memory_cgroup_mount;
 static char *memory_cgroup = NULL;
 static int memory_cgroup_len = 0;
@@ -70,24 +78,37 @@ static unsigned long cgroup_read_ulong(const char *name)
 	return ret;
 }
 
+static unsigned long long read_ullong(const char *filename)
+{
+	FILE *f;
+	unsigned long long ret = 0;
+	if ((f = fopen(filename, "r")) != NULL) {
+		if (fscanf(f, "%llu", &ret) != 1) {}
+		fclose(f);
+	}
+	return ret;
+}
+
 static cgroup_memory read_cgroup_memory_stats(void)
 {
 	FILE *csfd;
 	int i = 0, j = 0;
 	cgroup_memory cm = {0,};
 	char name[6], buf[255];
-	unsigned long value;
+	unsigned long value, total_inactive_file = 0;
 	struct _mem_tab {
 		const char *name;
 		unsigned long *value;
 	} mem_tab[] = {
-		{"cache", &cm.cache},
-		{"rss", &cm.rss},
+		{"hierarchical_memory_limit", &cm.limit},
+		{"total_cache", &cm.cache},
+		{"total_rss", &cm.rss},
+		{"total_dirty", &cm.dirty},
+		{"total_inactive_file", &total_inactive_file},
 		{NULL, NULL}
 	};
 
 	cm.available = true;
-	cm.limit = cgroup_read_ulong("limit_in_bytes") / 1024;
 	cm.usage = cgroup_read_ulong("usage_in_bytes") / 1024;
 
 	strcpy(memory_cgroup + memory_cgroup_len, "stat");
@@ -96,7 +117,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 
 	while (i < lengthof(mem_tab) - 1
 			&& fgets(buf, sizeof(buf), csfd)
-			&& sscanf(buf, "%5s %lu", name, &value) == 2) {
+			&& sscanf(buf, "%25s %lu", name, &value) == 2) {
 		for (j = 0; mem_tab[j].name != NULL; ++j) {
 			if (strcmp(mem_tab[j].name, name) == 0) {
 				++i;
@@ -105,6 +126,18 @@ static cgroup_memory read_cgroup_memory_stats(void)
 			}
 		}
 	}
+	fclose(csfd);
+
+	cm.usage = MAXIMUM(cm.usage - total_inactive_file, 0);
+
+	/* get the number of times oom was triggered for the cgroup */
+	strcpy(memory_cgroup + memory_cgroup_len, "oom_control");
+	if ((csfd = fopen(memory_cgroup, "r")) == NULL)
+		return cm;
+
+	while (fgets(buf, sizeof(buf), csfd))
+		if (sscanf(buf, "oom_kill %lu", &cm.oom_kill) == 1)
+			break;
 	fclose(csfd);
 
 	return cm;
@@ -166,6 +199,68 @@ static meminfo read_meminfo(void)
 	return mi;
 }
 
+static cgroup_cpu read_cgroup_cpu_stats(void)
+{
+	FILE *csfd;
+	cgroup_cpu cc = {0,};
+
+	cc.available = true;
+
+	if (cpu_cgroup != NULL) {
+		strcpy(cpu_cgroup + cpu_cgroup_len, "cfs_quota_us");
+		if ((csfd = fopen(cpu_cgroup, "r")) != NULL) {
+			if (fscanf(csfd, "%lld", &cc.quota) != 2) {}
+			fclose(csfd);
+		}
+
+		strcpy(cpu_cgroup + cpu_cgroup_len, "shares");
+		cc.shares = read_ullong(cpu_cgroup);
+	}
+
+	if (cpuacct_cgroup != NULL) {
+		int i = 0, j = 0;
+		char name[7], buf[255];
+		unsigned long long value;
+		struct _cpu_tab {
+			const char *name;
+			unsigned long long *value;
+		} cpu_tab[] = {
+			{"user", &cc.user},
+			{"system", &cc.system},
+			{NULL, NULL}
+		};
+
+		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "usage");
+		/* nanosecondsInSecond = 1000000000.0; */
+		cc.total = read_ullong(cpuacct_cgroup) / 1000000000.0 * SC_CLK_TCK;
+
+		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "usage_percpu");
+		if ((csfd = fopen(cpuacct_cgroup, "r")) != NULL) {
+			while (fscanf(csfd, "%*u ") == 0)
+				++cc.online_cpus;
+			fclose(csfd);
+		}
+
+		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "stat");
+		if ((csfd = fopen(cpuacct_cgroup, "r")) == NULL)
+			return cc;
+
+		while (i < lengthof(cpu_tab) -1
+				&& fgets(buf, sizeof(buf), csfd)
+				&& sscanf(buf, "%6s %llu", name, &value) == 2)
+			for (j = 0; cpu_tab[j].name != NULL; ++j)
+				if (strcmp(cpu_tab[j].name, name) == 0) {
+					++i;
+					*cpu_tab[j].value = value;
+					break;
+				}
+
+		fclose(csfd);
+	}
+
+	return cc;
+}
+
 static system_stat read_proc_stat(void)
 {
 	system_stat st = {0,};
@@ -199,6 +294,9 @@ static system_stat read_proc_stat(void)
 				st.procs_blocked = value;
 		}
 	fclose(stfd);
+
+	if (cpu_cgroup != NULL || cpuacct_cgroup != NULL)
+		st.cpu.cgroup = read_cgroup_cpu_stats();
 	return st;
 }
 
@@ -231,6 +329,19 @@ static void diff_system_stats(system_stat *new_stats)
 	new_stats->cpu.idle_diff = new_stats->cpu.idle < system_stats_old.cpu.idle ? 0.0:
 		SP_VALUE(system_stats_old.cpu.idle, new_stats->cpu.idle, itv);
 
+	if (new_stats->cpu.cgroup.available) {
+		double total = new_stats->cpu.cgroup.online_cpus
+			* SP_VALUE_100(system_stats_old.cpu.cgroup.total, new_stats->cpu.cgroup.total, itv);
+		long long system_diff = new_stats->cpu.cgroup.system - system_stats_old.cpu.cgroup.system;
+		long long user_diff = new_stats->cpu.cgroup.user - system_stats_old.cpu.cgroup.user;
+		long long sum_diff = system_diff + user_diff;
+
+		if (total > 0 && sum_diff > 0) {
+			new_stats->cpu.cgroup.system_diff = system_diff > 0 ? total * system_diff / sum_diff : 0;
+			new_stats->cpu.cgroup.user_diff = user_diff > 0 ? total * user_diff / sum_diff : 0;
+		}
+	}
+
 	if (new_stats->cpu.cpu_count > 1) itv = new_stats->uptime - system_stats_old.uptime;
 	new_stats->ctxt_diff = S_VALUE(system_stats_old.ctxt, new_stats->ctxt, itv);
 }
@@ -257,6 +368,22 @@ void system_stats_init(void)
 
 	if (uname(&un) == 0)
 		sysname = pstrdup(un.release);
+
+	if (cpu_cgroup_mount != NULL) {
+		const char prefix[] = "/cpu.";
+		cpu_cgroup_len = strlen(cpu_cgroup_mount);
+		cpu_cgroup = repalloc(cpu_cgroup_mount, cpu_cgroup_len + 18); /* strlen("/cpu.cfs_quota_us") + 1 */
+		strcpy(cpu_cgroup + cpu_cgroup_len, prefix);
+		cpu_cgroup_len += sizeof(prefix) - 1;
+	}
+
+	if (cpuacct_cgroup_mount != NULL) {
+		const char prefix[] = "/cpuacct.";
+		cpuacct_cgroup_len = strlen(cpuacct_cgroup_mount);
+		cpuacct_cgroup = repalloc(cpuacct_cgroup_mount, cpuacct_cgroup_len + 22); /* strlen("/cpuacct.usage_percpu") + 1 */
+		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, prefix);
+		cpuacct_cgroup_len += sizeof(prefix) - 1;
+	}
 
 	if (memory_cgroup_mount != NULL) {
 		const char prefix[] = "/memory.";

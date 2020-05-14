@@ -29,6 +29,8 @@ typedef struct {
 	unsigned long usage;
 	unsigned long rss;
 	unsigned long cache;
+	unsigned long dirty;
+	unsigned long oom_kill;
 } cgroup_memory;
 
 typedef struct {
@@ -43,6 +45,18 @@ typedef struct {
 	unsigned long as;
 	overcommit overcommit;
 } meminfo;
+
+typedef struct {
+	bool available;
+	unsigned int online_cpus;
+	unsigned long long shares;
+	long long quota;
+	unsigned long long total;
+	unsigned long long system;
+	double system_diff;
+	unsigned long long user;
+	double user_diff;
+} cgroup_cpu;
 
 typedef struct {
 	int fields;
@@ -63,6 +77,7 @@ typedef struct {
 	double steal_diff;
 	unsigned long long uptime;
 	unsigned long long uptime0;
+	cgroup_cpu cgroup;
 } cpu_stat;
 
 typedef struct {

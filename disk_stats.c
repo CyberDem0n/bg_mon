@@ -41,6 +41,8 @@ static bool run_du;
 static unsigned long long data_du, wal_du;
 static unsigned int du_counter;
 
+char *cpu_cgroup_mount = NULL;
+char *cpuacct_cgroup_mount = NULL;
 char *memory_cgroup_mount = NULL;
 
 /******************************************************
@@ -154,6 +156,14 @@ static List *read_mounts()
 			m->me_dummy = is_dummy(me);
 			m->me_remote = is_remote(me);
 			mounts = lappend(mounts, m);
+			if (cpu_cgroup_mount == NULL
+					&& strcmp(me->mnt_type, "cgroup") == 0
+					&& hasmntopt(me, "cpu"))
+				cpu_cgroup_mount = pstrdup(me->mnt_dir);
+			if (cpuacct_cgroup_mount == NULL
+					&& strcmp(me->mnt_type, "cgroup") == 0
+					&& hasmntopt(me, "cpuacct"))
+				cpuacct_cgroup_mount = pstrdup(me->mnt_dir);
 			if (memory_cgroup_mount == NULL
 					&& strcmp(me->mnt_type, "cgroup") == 0
 					&& hasmntopt(me, "memory"))
