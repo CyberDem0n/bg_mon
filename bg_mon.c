@@ -63,8 +63,9 @@ static struct aggregated_stats {
 static const int num_buckets = sizeof(aggregated)/sizeof(struct aggregated_stats);
 static time_t prev_minute = 0;
 
-static bool accept_brotli(const struct evkeyvalq *input_headers)
+static bool accepts_brotli(struct evhttp_request *req)
 {
+	const struct evkeyvalq *input_headers = evhttp_request_get_input_headers(req);
 	const char *accept_encoding = evhttp_find_header(input_headers, "Accept-Encoding");
 	if (accept_encoding) {
 		size_t len = strlen(accept_encoding);
@@ -76,11 +77,23 @@ static bool accept_brotli(const struct evkeyvalq *input_headers)
 	}
 	return false;
 }
-#endif
 
-#define QUOTE(STRING) "\"" STRING "\""
-#if PG_VERSION_NUM < 90500
-#define MyLatch &MyProc->procLatch
+static int parse_bucket_request(const char *uri)
+{
+	int ret = 0;
+	const char *p = uri + 1;
+
+	if (*uri != '/')
+		return -1;
+
+	do {
+		if (*p < '0' || *p > '9')
+			return -1;
+		ret = 10 * ret + (*p - '0');
+	} while (*(++p));
+
+	return ret;
+}
 #endif
 
 #define QUOTE(STRING) "\"" STRING "\""
@@ -354,9 +367,8 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	const char *uri = evhttp_request_get_uri(req);
 	struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
 #ifdef HAS_LIBBROTLI
-	const struct evkeyvalq *input_headers = evhttp_request_get_input_headers(req);
-	if (strlen(uri) == 3 && uri[0] == '/' && uri[1] >= '0' && uri[1] <= '9' && uri[2] >= '0' && uri[2] <= '9') {
-		int bucket = 10 * (uri[1] - '0') + uri[2] - '0';
+	int bucket = parse_bucket_request(uri);
+	if (bucket > -1) {
 		if (bucket < num_buckets) {
 			struct aggregated_stats *agg = aggregated + bucket;
 			if ((time(NULL) - agg->minute)/60 <= num_buckets) {
@@ -379,7 +391,7 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 		if (evbuffer) {
 			struct evbuffer *evb = evbuffer_new();
 #if HAS_LIBBROTLI
-			if (accept_brotli(input_headers)) {
+			if (accepts_brotli(req)) {
 				struct compression_state *state = malloc_fn(sizeof(struct compression_state));
 				state->to = NULL;
 				state->len = 0;
