@@ -21,6 +21,7 @@ script:
     set -e
     export PATH=/usr/lib/postgresql/$PG/bin:$PATH
     sudo PATH=$PATH make USE_PGXS=1 ENABLE_GCOV=1 install
+    sudo PATH=$PATH make USE_PGXS=1 ENABLE_GCOV=1 with_llvm=no clean all install
     bash -x test.sh
     if grep -E '(ERROR|FATAL)' test_cluster?/*log/postgresql*.log | grep -Ev '(no COPY in progress|could not connect to|could not send|database system is shutting|database system is starting up)'; then exit 1; fi
 after_success:
