@@ -31,6 +31,7 @@ typedef struct {
 	unsigned long cache;
 	unsigned long dirty;
 	unsigned long oom_kill;
+	unsigned long failcnt;
 } cgroup_memory;
 
 typedef struct {

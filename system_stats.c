@@ -110,6 +110,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 
 	cm.available = true;
 	cm.usage = cgroup_read_ulong("usage_in_bytes") / 1024;
+	cm.failcnt = cgroup_read_ulong("failcnt");
 
 	strcpy(memory_cgroup + memory_cgroup_len, "stat");
 	if ((csfd = fopen(memory_cgroup, "r")) == NULL)
