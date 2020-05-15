@@ -18,7 +18,7 @@ branches:
 before_install:
   - sudo service postgresql stop
   - sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
-  - if ! sudo -E apt-get -yq --no-install-suggests --no-install-recommends $(travis_apt_get_options) install postgresql-$PG postgresql-server-dev-$PG libevent-dev pv; then echo; fi
+  - if ! sudo -E apt-get -yq --no-install-suggests --no-install-recommends $(travis_apt_get_options) install postgresql-$PG postgresql-server-dev-$PG libevent-dev pv brotli libbrotli1 libbrotli-dev; then echo; fi
   - sudo pip install --upgrade cpp-coveralls
 script:
   - |

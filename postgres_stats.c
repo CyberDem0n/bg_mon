@@ -633,7 +633,7 @@ static void read_procfs(proc_stat_list *list)
 	list->pos = 0;
 
 	if ((proc = opendir(proc_file)) == NULL) {
-		elog(ERROR, "couldn't open '/proc'");
+		elog(WARNING, "couldn't open '/proc'");
 		return;
 	}
 
@@ -661,7 +661,7 @@ static void read_procfs(proc_stat_list *list)
 	}
 
 	if (dp == NULL && errno != 0)
-		elog(ERROR, "error reading /proc");
+		elog(WARNING, "error reading /proc");
 
 	closedir(proc);
 

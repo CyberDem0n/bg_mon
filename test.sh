@@ -41,7 +41,7 @@ function start_postgres() {
 }
 
 function create_cluster() {
-    initdb test_cluster$1
+    initdb -k test_cluster$1
     echo "host replication all 127.0.0.1/32 trust
 host replication all ::1/128 trust" >> test_cluster$1/pg_hba.conf
     echo "unix_socket_directories = '.'
@@ -66,12 +66,16 @@ bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
 
 function curl_ps_loop() {
     for a in $(seq 1 $2); do
-        curl -s http://localhost:$(($bport+$1))
+        curl -s -H "Accept-Encoding: br" http://localhost:$(($bport+$1)) | brotli -d
         echo
         sleep 1
 	if [[ ! -z "$3" ]]; then
             ps auxwwwf | grep postgres
         fi
+    done
+    curl -s http://localhost:$(($bport+$1))
+    for a in $(seq -f '%02g' 0 19); do
+        curl -s http://localhost:$(($bport+$1))/$a > /dev/null
     done
 }
 
