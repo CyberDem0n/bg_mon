@@ -83,7 +83,7 @@ function clone_cluster() {
     mkdir test_cluster$1
     chmod 700 test_cluster1
     if [[ $version =~ ^[1-9][0-9]$ ]]; then opt="-X none"; fi
-    time pg_basebackup $opt -R -c fast -h localhost -p $port -F t -D - | pv -qL 3M | tar -C test_cluster1 -x
+    time pg_basebackup $opt -R -c fast -h localhost -p $port -F t -D - | pv -qL 3M | tar -C test_cluster1 -x || true
     echo "bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
     start_postgres $1
     curl_ps_loop $1 10

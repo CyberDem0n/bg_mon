@@ -3,9 +3,9 @@
 
 typedef enum PgBackendType
 {
-	PG_UNDEFINED = -2,
-	PG_UNKNOWN = -1,
-	PG_AUTOVAC_LAUNCHER = 0,
+	PG_UNDEFINED = -1,
+	PG_UNKNOWN = 0,
+	PG_AUTOVAC_LAUNCHER,
 	PG_AUTOVAC_WORKER,
 	PG_BACKEND,
 	PG_BG_WORKER,
@@ -16,14 +16,14 @@ typedef enum PgBackendType
 	PG_WAL_SENDER,
 	PG_WAL_WRITER,
 	PG_ARCHIVER,
-	PG_LOGGER,
 	PG_STATS_COLLECTOR,
+	PG_LOGGER,
 	PG_PARALLEL_WORKER,
 	PG_LOGICAL_LAUNCHER,
 	PG_LOGICAL_WORKER
 } PgBackendType;
 
-#define UNKNOWN_PROC_NAME "???"
+#define UNKNOWN_NAME "not initialized"
 #define AUTOVAC_LAUNCHER_PROC_NAME "autovacuum launcher"
 #define AUTOVAC_WORKER_PROC_NAME "autovacuum worker"
 #define BACKEND_PROC_NAME "backend"
