@@ -11,6 +11,10 @@ matrix:
   - env: PG=10
   - env: PG=11
   - env: PG=12
+branches:
+  only:
+  - master
+  - /^v\d+\.\d+(\.\d+)?$/
 before_install:
   - sudo service postgresql stop
   - sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
