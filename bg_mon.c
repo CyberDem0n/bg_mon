@@ -265,9 +265,9 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 		cgroup_cpu cc = c.cgroup;
 		evbuffer_add_printf(evb, "}}, \"cgroup\": {");
 		if (cm.available) {
-			evbuffer_add_printf(evb, "\"memory\": {\"limit\": %lu, \"usage\": %lu", cm.limit, cm.usage);
-			evbuffer_add_printf(evb, ", \"rss\": %lu, \"cache\": %lu", cm.rss, cm.cache);
-			evbuffer_add_printf(evb, ", \"dirty\": %lu, \"oom_kill\": %lu", cm.dirty, cm.oom_kill);
+			evbuffer_add_printf(evb, "\"memory\": {\"limit\": %lu, \"usage\": %lu, ", cm.limit, cm.usage);
+			evbuffer_add_printf(evb, "\"rss\": %lu, \"cache\": %lu, \"dirty\": %lu", cm.rss, cm.cache, cm.dirty);
+			evbuffer_add_printf(evb, ", \"oom_kill\": %lu, \"failcnt\": %lu", cm.oom_kill, cm.failcnt);
 			if (cc.available)
 				evbuffer_add_printf(evb, "}, ");
 		}
