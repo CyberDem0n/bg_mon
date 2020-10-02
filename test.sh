@@ -50,7 +50,6 @@ logging_collector = 'on'
 archive_mode = 'on'
 archive_command = 'true'
 max_wal_senders = 10
-wal_keep_segments = 100
 shared_preload_libraries = 'bg_mon'
 bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
     if [ $version != "9.3" ] && [ $version != "9.4" ]; then
