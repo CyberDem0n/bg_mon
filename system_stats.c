@@ -232,8 +232,8 @@ static cgroup_cpu read_cgroup_cpu_stats(void)
 		};
 
 		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "usage");
-		/* nanosecondsInSecond = 1000000000.0; */
-		cc.total = read_ullong(cpuacct_cgroup) / 1000000000.0 * SC_CLK_TCK;
+		/* nanosecondsInMullisecond = 1000000.0, because we want to get millicores */
+		cc.total = read_ullong(cpuacct_cgroup) / 1000000.0;
 
 		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "usage_percpu");
 		if ((csfd = fopen(cpuacct_cgroup, "r")) != NULL) {
@@ -332,7 +332,7 @@ static void diff_system_stats(system_stat *new_stats)
 
 	if (new_stats->cpu.cgroup.available) {
 		double total = new_stats->cpu.cgroup.online_cpus
-			* SP_VALUE_100(system_stats_old.cpu.cgroup.total, new_stats->cpu.cgroup.total, itv);
+			* S_VALUE(system_stats_old.cpu.cgroup.total, new_stats->cpu.cgroup.total, itv);
 		long long system_diff = new_stats->cpu.cgroup.system - system_stats_old.cpu.cgroup.system;
 		long long user_diff = new_stats->cpu.cgroup.user - system_stats_old.cpu.cgroup.user;
 		long long sum_diff = system_diff + user_diff;
