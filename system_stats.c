@@ -232,7 +232,7 @@ static cgroup_cpu read_cgroup_cpu_stats(void)
 		};
 
 		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "usage");
-		/* nanosecondsInMullisecond = 1000000.0, because we want to get millicores */
+		/* nanosecondsInMillisecond = 1000000.0, because we want to get millicores */
 		cc.total = read_ullong(cpuacct_cgroup) / 1000000.0;
 
 		strcpy(cpuacct_cgroup + cpuacct_cgroup_len, "usage_percpu");
