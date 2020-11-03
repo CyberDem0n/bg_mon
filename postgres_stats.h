@@ -90,20 +90,56 @@ typedef struct {
 	uint32 raw_wait_event;
 	char *query;
 	proc_stat ps;
-} pg_stat;
+} pg_stat_activity;
 
 typedef struct {
-	pg_stat *values;
+	pg_stat_activity *values;
 	size_t size;
 	size_t pos;
-	unsigned long long uptime;
-	bool recovery_in_progress;
 	int total_connections;
 	int active_connections;
 	int idle_in_transaction_connections;
-} pg_stat_list;
+} pg_stat_activity_list;
+
+typedef struct {
+	Oid databaseid;
+	char *datname;
+	int64 n_xact_commit;
+	int64 n_xact_rollback;
+	int64 n_blocks_fetched;
+	int64 n_blocks_hit;
+	int64 n_tuples_returned;
+	int64 n_tuples_fetched;
+	int64 n_tuples_inserted;
+	int64 n_tuples_updated;
+	int64 n_tuples_deleted;
+	int64 n_conflict_tablespace;
+	int64 n_conflict_lock;
+	int64 n_conflict_snapshot;
+	int64 n_conflict_bufferpin;
+	int64 n_conflict_startup_deadlock;
+	int64 n_temp_files;
+	int64 n_temp_bytes;
+	int64 n_deadlocks;
+	int64 n_checksum_failures;
+	TimestampTz last_checksum_failure;
+	int64 n_block_read_time;       /* times in microseconds */
+	int64 n_block_write_time;
+} db_stat;
+
+typedef struct {
+	db_stat *values;
+	size_t size;
+	size_t pos;
+} db_stat_list;
+
+typedef struct {
+	unsigned long long uptime;
+	bool recovery_in_progress;
+	pg_stat_activity_list activity;
+} pg_stat;
 
 void postgres_stats_init(void);
-pg_stat_list get_postgres_stats(void);
+pg_stat get_postgres_stats(void);
 
 #endif /* _POSTGRES_STATS_H_ */

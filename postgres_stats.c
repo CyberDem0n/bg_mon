@@ -45,19 +45,19 @@ typedef struct {
 } proc_stat_list;
 
 static proc_stat_list proc_stats;
-static pg_stat_list pg_stats_current;
-static pg_stat_list pg_stats_new;
+static pg_stat pg_stats_current;
+static pg_stat pg_stats_new;
 
 typedef struct {
-	pg_stat		*p;		/* pointer to a corresponding pg_stat entry */
-	uint32		pid;
+	pg_stat_activity	*p;		/* pointer to a corresponding pg_stat_activity entry */
+	uint32				pid;
 #if PG_VERSION_NUM < 90600
-	uint32		field1; /* a 32-bit ID field */
-	uint32		field2; /* a 32-bit ID field */
-	uint32		field3; /* a 32-bit ID field */
-	uint16		field4; /* a 16-bit ID field */
-	uint8		type;	/* see enum LockTagType */
-	bool		granted;
+	uint32				field1; /* a 32-bit ID field */
+	uint32				field2; /* a 32-bit ID field */
+	uint32				field3; /* a 32-bit ID field */
+	uint16				field4; /* a 16-bit ID field */
+	uint8				type;	/* see enum LockTagType */
+	bool				granted;
 #endif
 } _lock;
 
@@ -189,14 +189,14 @@ static _lock *get_pg_locks(int *num_locks)
 	return locks;
 }
 
-static pg_stat *find_pg_proc_by_pid(pg_stat_list pg_stats, uint32 pid)
+static pg_stat_activity *find_pg_proc_by_pid(pg_stat_activity_list pg_stats, uint32 pid)
 {
-	pg_stat *low = pg_stats.values;
-	pg_stat *high = low + pg_stats.pos - 1;
+	pg_stat_activity *low = pg_stats.values;
+	pg_stat_activity *high = low + pg_stats.pos - 1;
 
 	while (low <= high)
 	{
-		pg_stat *middle = low + (high - low) / 2;
+		pg_stat_activity *middle = low + (high - low) / 2;
 
 		if (pid < middle->pid)
 			high = middle - 1;
@@ -209,7 +209,7 @@ static pg_stat *find_pg_proc_by_pid(pg_stat_list pg_stats, uint32 pid)
 	return NULL;
 }
 
-static void update_blockers(pg_stat *blocked, pg_stat *blocker)
+static void update_blockers(pg_stat_activity *blocked, pg_stat_activity *blocker)
 {
 	blocker->is_blocker = true;
 	if (blocked->blockers)
@@ -219,7 +219,7 @@ static void update_blockers(pg_stat *blocked, pg_stat *blocker)
 	blocked->num_blockers++;
 }
 
-static void fix_blockers_array(pg_stat *blocked)
+static void fix_blockers_array(pg_stat_activity *blocked)
 {
 	if (blocked->num_blockers < 2)
 	{
@@ -229,7 +229,7 @@ static void fix_blockers_array(pg_stat *blocked)
 	}
 }
 
-static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock *locks, int num_locks)
+static void enrich_pg_stats(MemoryContext othercxt, pg_stat_activity_list pg_stats, _lock *locks, int num_locks)
 {
 	int	i, j, k, num_blockers;
 
@@ -300,7 +300,7 @@ adjust_i:
 			{
 				bool e = false;
 				int m;
-				pg_stat *blocker;
+				pg_stat_activity *blocker;
 
 				if ((k = DatumGetInt32(blockers[j])) == 0) continue;
 
@@ -320,18 +320,18 @@ adjust_i:
 }
 
 
-static void pg_stat_list_init(pg_stat_list *list)
+static void pg_stat_activity_list_init(pg_stat_activity_list *list)
 {
 	list->pos = 0;
 	list->size = MaxBackends + 17;
-	list->values = palloc(sizeof(pg_stat) * list->size);
+	list->values = palloc(sizeof(pg_stat_activity) * list->size);
 }
 
-static void pg_stat_list_free_resources(pg_stat_list *list)
+static void pg_stat_list_free_resources(pg_stat_activity_list *list)
 {
 	size_t i;
 	for (i = 0; i < list->pos; ++i) {
-		pg_stat ps = list->values[i];
+		pg_stat_activity ps = list->values[i];
 		FREE(ps.query);
 		FREE(ps.usename);
 		FREE(ps.datname);
@@ -344,7 +344,7 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 	list->pos = 0;
 }
 
-static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
+static bool pg_stat_list_add(pg_stat_activity_list *list, pg_stat_activity ps)
 {
 	if (list->values == NULL)
 		list->pos = list->size = 0;
@@ -352,7 +352,7 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 	if (list->pos >= list->size) {
 		int new_size = list->size > 0 ? list->size * 2 : 7;
 		list->size = new_size;
-		list->values = repalloc(list->values, sizeof(pg_stat)*new_size);
+		list->values = repalloc(list->values, sizeof(pg_stat_activity)*new_size);
 	}
 	list->values[list->pos++] = ps;
 	return true;
@@ -617,9 +617,9 @@ static int proc_stat_cmp(const void *el1, const void *el2)
 	return ((const proc_stat *) el1)->pid - ((const proc_stat *) el2)->pid;
 }
 
-static int pg_stat_cmp(const void *el1, const void *el2)
+static int pg_stat_activity_cmp(const void *el1, const void *el2)
 {
-	return ((const pg_stat *) el1)->pid - ((const pg_stat *) el2)->pid;
+	return ((const pg_stat_activity *) el1)->pid - ((const pg_stat_activity *) el2)->pid;
 }
 
 static void read_procfs(proc_stat_list *list)
@@ -670,7 +670,7 @@ static void read_procfs(proc_stat_list *list)
 		qsort(list->values, list->pos, sizeof(proc_stat), proc_stat_cmp);
 }
 
-static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
+static void merge_stats(pg_stat_activity_list *pg_stats, proc_stat_list proc_stats)
 {
 	size_t pg_stats_pos = 0, proc_stats_pos = 0;
 	size_t pg_stats_size = pg_stats->pos;
@@ -681,7 +681,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 			break;
 		} else if (pg_stats_pos >= pg_stats_size || // No more entries from pg_stats_activity (special process?)
 				pg_stats->values[pg_stats_pos].pid > proc_stats.values[proc_stats_pos].pid) {
-			pg_stat pgs = {0,};
+			pg_stat_activity pgs = {0,};
 			pgs.ps = proc_stats.values[proc_stats_pos];
 			pgs.pid = pgs.ps.pid;
 			pgs.type = PG_UNDEFINED; /* unknown process */
@@ -695,7 +695,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 	}
 
 	if (pg_stats->pos > 0)
-		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
+		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat_activity), pg_stat_activity_cmp);
 }
 
 #define PROCESS_PATTERN " process"
@@ -793,7 +793,7 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 	return type;
 }
 
-static void read_proc_cmdline(pg_stat *stat)
+static void read_proc_cmdline(pg_stat_activity *stat)
 {
 	FILE *f;
 	char buf[MAXPGPATH];
@@ -829,7 +829,7 @@ static void read_proc_cmdline(pg_stat *stat)
 	fclose(f);
 }
 
-static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, unsigned long long itv)
+static void calculate_stats_diff(pg_stat_activity *old_stat, pg_stat_activity *new_stat, unsigned long long itv)
 {
 	proc_stat *o = &old_stat->ps;
 	proc_stat *n = &new_stat->ps;
@@ -845,35 +845,41 @@ static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, unsigned 
 	n->gtime_diff = SP_VALUE_100(o->gtime, n->gtime, itv);
 }
 
-static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
+static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_activity_list new_activity, unsigned long long itv)
+{
+	size_t old_pos = 0, new_pos = 0;
+
+	while (old_pos < old_activity.pos || new_pos < new_activity.pos) {
+		if (new_pos >= new_activity.pos)
+			old_activity.values[old_pos++].ps.free_cmdline = true;
+		else if (old_pos >= old_activity.pos)
+			read_proc_cmdline(new_activity.values + new_pos++);
+		else if (old_activity.values[old_pos].pid == new_activity.values[new_pos].pid) {
+			if (old_activity.values[old_pos].ps.start_time != new_activity.values[new_pos].ps.start_time)
+				old_activity.values[old_pos].ps.free_cmdline = true;
+			else if (old_activity.values[old_pos].type != PG_UNDEFINED && new_activity.values[new_pos].type == PG_UNDEFINED) {
+				new_activity.values[new_pos].type = old_activity.values[old_pos].type;
+				if (new_activity.values[new_pos].type == PG_LOGICAL_WORKER || new_activity.values[new_pos].type == PG_BG_WORKER)
+					new_activity.values[new_pos].ps.cmdline = old_activity.values[old_pos].ps.cmdline;
+			}
+
+			read_proc_cmdline(new_activity.values + new_pos);
+			calculate_stats_diff(old_activity.values + old_pos++, new_activity.values + new_pos++, itv);
+		} else if (old_activity.values[old_pos].pid > new_activity.values[new_pos].pid)
+			read_proc_cmdline(new_activity.values + new_pos++);
+		else // old.pid < new.pid
+			old_activity.values[old_pos++].ps.free_cmdline = true;
+	}
+}
+
+static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 {
 	unsigned long long itv;
-	size_t old_pos = 0, new_pos = 0;
 
 	if (old_stats.uptime == 0) return;
 	itv = new_stats.uptime - old_stats.uptime;
 
-	while (old_pos < old_stats.pos || new_pos < new_stats.pos) {
-		if (new_pos >= new_stats.pos)
-			old_stats.values[old_pos++].ps.free_cmdline = true;
-		else if (old_pos >= old_stats.pos)
-			read_proc_cmdline(new_stats.values + new_pos++);
-		else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
-			if (old_stats.values[old_pos].ps.start_time != new_stats.values[new_pos].ps.start_time)
-				old_stats.values[old_pos].ps.free_cmdline = true;
-			else if (old_stats.values[old_pos].type != PG_UNDEFINED && new_stats.values[new_pos].type == PG_UNDEFINED) {
-				new_stats.values[new_pos].type = old_stats.values[old_pos].type;
-				if (new_stats.values[new_pos].type == PG_LOGICAL_WORKER || new_stats.values[new_pos].type == PG_BG_WORKER)
-					new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
-			}
-
-			read_proc_cmdline(new_stats.values + new_pos);
-			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, itv);
-		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid)
-			read_proc_cmdline(new_stats.values + new_pos++);
-		else // old.pid < new.pid
-			old_stats.values[old_pos++].ps.free_cmdline = true;
-	}
+	diff_pg_stat_activity(old_stats.activity, new_stats.activity, itv);
 }
 
 static double calculate_age(TimestampTz ts)
@@ -924,7 +930,7 @@ static PgBackendType map_backend_type(BackendType type)
 }
 #endif
 
-static void get_pg_stat_activity(pg_stat_list *pg_stats)
+static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 {
 	bool		 init_postgres = false;
 	int			 i, num_backends, num_locks;
@@ -952,7 +958,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
 		if (beentry && beentry->st_procpid != MyProcPid)
 		{
-			pg_stat ps = {beentry->st_procpid, 0,};
+			pg_stat_activity ps = {beentry->st_procpid, 0,};
 #if PG_VERSION_NUM >= 90600
 			PGPROC *proc = BackendPidGetProc(beentry->st_procpid);
 #if PG_VERSION_NUM >= 100000
@@ -1030,15 +1036,13 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	pgstat_clear_snapshot();
 
-	if ((num_backends = pg_stats->pos) > 1)
-		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
+	if (pg_stats->pos > 1)
+		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat_activity), pg_stat_activity_cmp);
 
 	if (num_locks > 0)
 		enrich_pg_stats(othercxt, *pg_stats, locks, num_locks);
 
 	MemoryContextDelete(othercxt);
-
-	pg_stats->recovery_in_progress = RecoveryInProgress();
 
 	if (init_postgres)
 	{
@@ -1052,62 +1056,72 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		SetProcessingMode(NormalProcessing);
 		MemoryContextSwitchTo(oldcxt);
 	}
+}
 
-	othercxt = CurrentMemoryContext;
+static void resolve_database_and_user_ids(pg_stat_activity_list activity, MemoryContext resultcxt)
+{
+	MemoryContext oldcxt;
+	int i;
 
-	if (IsNormalProcessingMode())
+	for (i = 0; i < activity.pos; ++i)
 	{
-		StartTransactionCommand();
-		(void) GetTransactionSnapshot();
-
-		for (i = 0; i < num_backends; ++i)
-		{
-			pg_stat *ps = pg_stats->values + i;
-			if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
-				if (ps->userid)
+		pg_stat_activity *ps = activity.values + i;
+		if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
+			if (ps->userid)
+			{
+				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
+				if (HeapTupleIsValid(roleTup))
 				{
-					HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
-					if (HeapTupleIsValid(roleTup))
-					{
-						oldcxt = MemoryContextSwitchTo(othercxt);
-						ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
-						MemoryContextSwitchTo(oldcxt);
-						ReleaseSysCache(roleTup);
-					}
+					oldcxt = MemoryContextSwitchTo(resultcxt);
+					ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
+					MemoryContextSwitchTo(oldcxt);
+					ReleaseSysCache(roleTup);
 				}
+			}
 
-				if (ps->databaseid)
+			if (ps->databaseid)
+			{
+				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
+				if (HeapTupleIsValid(databaseTup))
 				{
-					HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
-					if (HeapTupleIsValid(databaseTup))
-					{
-						oldcxt = MemoryContextSwitchTo(othercxt);
-						ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
-						MemoryContextSwitchTo(oldcxt);
-						ReleaseSysCache(databaseTup);
-					}
+					oldcxt = MemoryContextSwitchTo(resultcxt);
+					ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
+					MemoryContextSwitchTo(oldcxt);
+					ReleaseSysCache(databaseTup);
 				}
 			}
 		}
-
-		CommitTransactionCommand();
-		MemoryContextSwitchTo(othercxt);
 	}
 }
 
-pg_stat_list get_postgres_stats(void)
+pg_stat get_postgres_stats(void)
 {
-	pg_stat_list pg_stats_tmp;
+	pg_stat pg_stats_tmp;
 
 	read_procfs(&proc_stats);
 
-	pg_stat_list_free_resources(&pg_stats_new);
+	pg_stat_list_free_resources(&pg_stats_new.activity);
 
-	get_pg_stat_activity(&pg_stats_new);
+	get_pg_stat_activity(&pg_stats_new.activity);
+
+	if (IsNormalProcessingMode()) {
+		MemoryContext resultcxt = CurrentMemoryContext;
+
+		StartTransactionCommand();
+		(void) GetTransactionSnapshot();
+
+		resolve_database_and_user_ids(pg_stats_new.activity, resultcxt);
+
+		CommitTransactionCommand();
+		MemoryContextSwitchTo(resultcxt);
+	}
 
 	pg_stats_new.uptime = system_stats_old.uptime;
 
-	merge_stats(&pg_stats_new, proc_stats);
+	pg_stats_new.recovery_in_progress = RecoveryInProgress();
+
+	merge_stats(&pg_stats_new.activity, proc_stats);
+
 	diff_pg_stats(pg_stats_current, pg_stats_new);
 
 	pg_stats_tmp = pg_stats_current;
@@ -1120,10 +1134,10 @@ pg_stat_list get_postgres_stats(void)
 void postgres_stats_init(void)
 {
 	mem_page_size = getpagesize() / 1024;
-	pg_stat_list_init(&pg_stats_current);
-	pg_stat_list_init(&pg_stats_new);
+	pg_stat_activity_list_init(&pg_stats_current.activity);
+	pg_stat_activity_list_init(&pg_stats_new.activity);
 
-	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.size));
+	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.activity.size));
 
 	cmdline_prefix_len = 10;
 
