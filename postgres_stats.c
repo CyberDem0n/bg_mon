@@ -62,6 +62,7 @@ typedef struct {
 } _lock;
 
 #if PG_VERSION_NUM >= 90600
+#define UINT32_ACCESS_ONCE(var)		((uint32)(*((volatile uint32 *)&(var))))
 #define IS_GRANTED(l) false
 #else
 #define IS_GRANTED(l) l.granted
@@ -881,6 +882,48 @@ static double calculate_age(TimestampTz ts)
 	return ret > 0 ? ret : 0;
 }
 
+#if PG_VERSION_NUM >= 100000
+static PgBackendType map_backend_type(BackendType type)
+{
+	switch (type)
+	{
+		case B_AUTOVAC_LAUNCHER:
+			return PG_AUTOVAC_LAUNCHER;
+		case B_AUTOVAC_WORKER:
+			return PG_AUTOVAC_WORKER;
+		case B_BACKEND:
+			return PG_BACKEND;
+/*		case B_BG_WORKER:
+			return PG_BG_WORKER;*/
+		case B_BG_WRITER:
+			return PG_BG_WRITER;
+		case B_CHECKPOINTER:
+			return PG_CHECKPOINTER;
+		case B_STARTUP:
+			return PG_STARTUP;
+		case B_WAL_RECEIVER:
+			return PG_WAL_RECEIVER;
+		case B_WAL_SENDER:
+			return PG_WAL_SENDER;
+		case B_WAL_WRITER:
+			return PG_WAL_WRITER;
+#if PG_VERSION_NUM >= 130000
+		case B_INVALID:
+			return PG_UNKNOWN;
+		case B_ARCHIVER:
+			return PG_ARCHIVER;
+		case B_STATS_COLLECTOR:
+			return PG_STATS_COLLECTOR;
+		case B_LOGGER:
+			return PG_LOGGER;
+#endif
+		case B_BG_WORKER:
+		default:
+			return PG_UNDEFINED;
+	}
+}
+#endif
+
 static void get_pg_stat_activity(pg_stat_list *pg_stats)
 {
 	bool		 init_postgres = false;
@@ -900,27 +943,47 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	locks = get_pg_locks(&num_locks);
 	MemoryContextSwitchTo(oldcxt);
 
+	pg_stats->total_connections = 1;  /* bg_mon */
+	pg_stats->active_connections = 0;
+	pg_stats->idle_in_transaction_connections = 0;
+
 	for (i = 1; i <= num_backends; ++i)
 	{
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
-		if (beentry
-#if PG_VERSION_NUM >= 100000
-				&& beentry->st_backendType != B_AUTOVAC_LAUNCHER
-				&& beentry->st_backendType != B_BG_WRITER
-				&& beentry->st_backendType != B_CHECKPOINTER
-				&& beentry->st_backendType != B_STARTUP
-				&& beentry->st_backendType != B_WAL_RECEIVER
-				&& beentry->st_backendType != B_WAL_WRITER
-#endif
-				&& beentry->st_procpid != MyProcPid)
+		if (beentry && beentry->st_procpid != MyProcPid)
 		{
+			pg_stat ps = {beentry->st_procpid, 0,};
 #if PG_VERSION_NUM >= 90600
-			PGPROC *proc;
+			PGPROC *proc = BackendPidGetProc(beentry->st_procpid);
+#if PG_VERSION_NUM >= 100000
+			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
+				proc = AuxiliaryPidGetProc(beentry->st_procpid);
 #endif
-			pg_stat ps = {0, };
+			if (proc != NULL)
+				ps.raw_wait_event = UINT32_ACCESS_ONCE(proc->wait_event_info);
 
-			ps.pid = beentry->st_procpid;
-			ps.databaseid = beentry->st_databaseid;
+			if (proc != NULL && proc->lockGroupLeader && proc->lockGroupLeader->pid != beentry->st_procpid) {
+				ps.parent_pid = proc->lockGroupLeader->pid;
+				ps.type = PG_PARALLEL_WORKER;
+			}
+			else
+#endif
+#if PG_VERSION_NUM >= 100000
+				ps.type = map_backend_type(beentry->st_backendType);
+#else
+			{
+				SockAddr zero_clientaddr = {0,};
+				/* hacky way to distinguish between normal backend and presumably bgworker */
+				if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr, sizeof(zero_clientaddr)) == 0
+						|| beentry->st_databaseid == 0)
+					ps.type = PG_UNDEFINED;
+				else if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
+					ps.type = PG_AUTOVAC_WORKER;
+				else ps.type = PG_BACKEND;
+			}
+#endif
+			if ((ps.databaseid = beentry->st_databaseid))
+				pg_stats->total_connections++;
 			ps.userid = beentry->st_userid;
 			ps.state = beentry->st_state;
 
@@ -932,11 +995,15 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 			if (ps.state == STATE_IDLEINTRANSACTION)
 			{
+				if (ps.databaseid)
+					pg_stats->idle_in_transaction_connections++;
 				if (beentry->st_xact_start_timestamp == beentry->st_state_start_timestamp)
 					ps.idle_in_transaction_age = 0;
 				else
 					ps.idle_in_transaction_age = calculate_age(beentry->st_state_start_timestamp);
-			} else if (ps.state == STATE_RUNNING)
+			} else if (ps.state == STATE_RUNNING) {
+				if (ps.databaseid)
+					pg_stats->active_connections++;
 #if PG_VERSION_NUM >= 110000
 				if (*beentry->st_activity_raw)
 				{
@@ -949,6 +1016,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 #else
 				ps.query = *beentry->st_activity ? json_escape_string(beentry->st_activity) : NULL;
 #endif
+			}
 
 			if (beentry->st_xact_start_timestamp)
 				ps.age = calculate_age(beentry->st_xact_start_timestamp);
@@ -956,34 +1024,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				ps.age = calculate_age(beentry->st_activity_start_timestamp);
 			else ps.age = -1;
 
-#if PG_VERSION_NUM >= 90600
-			proc = BackendPidGetProc(beentry->st_procpid);
-#if PG_VERSION_NUM >= 100000
-			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
-				proc = AuxiliaryPidGetProc(beentry->st_procpid);
-
-			ps.type = beentry->st_backendType == B_BG_WORKER ? PG_UNDEFINED : (beentry->st_backendType + 1 - B_AUTOVAC_LAUNCHER);
-#endif
-			if (proc != NULL && proc->lockGroupLeader && proc->lockGroupLeader->pid != ps.pid) {
-				ps.parent_pid = proc->lockGroupLeader->pid;
-				ps.type = PG_PARALLEL_WORKER;
-			}
-#endif
-#if PG_VERSION_NUM < 100000
-#if PG_VERSION_NUM >= 90600
-			else
-#endif
-			{
-				SockAddr zero_clientaddr = {0,};
-				/* hacky way to distinguish between normal backend and presumably bgworker */
-				if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr, sizeof(zero_clientaddr)) == 0
-						|| ps.databaseid == 0)
-					ps.type = PG_UNDEFINED;
-				else if (beentry->st_activity && 0 == strncmp(beentry->st_activity, "autovacuum: ", 12))
-					ps.type = PG_AUTOVAC_WORKER;
-				else ps.type = PG_BACKEND;
-			}
-#endif
 			pg_stat_list_add(pg_stats, ps);
 		}
 	}
@@ -999,8 +1039,6 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	MemoryContextDelete(othercxt);
 
 	pg_stats->recovery_in_progress = RecoveryInProgress();
-	pg_stats->total_connections = num_backends;
-	pg_stats->active_connections = 0;
 
 	if (init_postgres)
 	{
@@ -1021,42 +1059,37 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 	{
 		StartTransactionCommand();
 		(void) GetTransactionSnapshot();
-	}
 
-	for (i = 0; i < num_backends; ++i)
-	{
-		pg_stat *ps = pg_stats->values + i;
-		if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
-			if (ps->userid && IsNormalProcessingMode())
-			{
-				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
-				if (HeapTupleIsValid(roleTup))
+		for (i = 0; i < num_backends; ++i)
+		{
+			pg_stat *ps = pg_stats->values + i;
+			if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
+				if (ps->userid)
 				{
-					oldcxt = MemoryContextSwitchTo(othercxt);
-					ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
-					MemoryContextSwitchTo(oldcxt);
-					ReleaseSysCache(roleTup);
+					HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
+					if (HeapTupleIsValid(roleTup))
+					{
+						oldcxt = MemoryContextSwitchTo(othercxt);
+						ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
+						MemoryContextSwitchTo(oldcxt);
+						ReleaseSysCache(roleTup);
+					}
+				}
+
+				if (ps->databaseid)
+				{
+					HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
+					if (HeapTupleIsValid(databaseTup))
+					{
+						oldcxt = MemoryContextSwitchTo(othercxt);
+						ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
+						MemoryContextSwitchTo(oldcxt);
+						ReleaseSysCache(databaseTup);
+					}
 				}
 			}
-
-			if (ps->databaseid && IsNormalProcessingMode())
-			{
-				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
-				if (HeapTupleIsValid(databaseTup))
-				{
-					oldcxt = MemoryContextSwitchTo(othercxt);
-					ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
-					MemoryContextSwitchTo(oldcxt);
-					ReleaseSysCache(databaseTup);
-				}
-			}
-
-			pg_stats->active_connections++;
 		}
-	}
 
-	if (IsNormalProcessingMode())
-	{
 		CommitTransactionCommand();
 		MemoryContextSwitchTo(othercxt);
 	}

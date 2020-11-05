@@ -87,6 +87,7 @@ typedef struct {
 	uintptr_t blockers;
 	uint32 num_blockers;
 	pid_t parent_pid;
+	uint32 raw_wait_event;
 	char *query;
 	proc_stat ps;
 } pg_stat;
@@ -99,6 +100,7 @@ typedef struct {
 	bool recovery_in_progress;
 	int total_connections;
 	int active_connections;
+	int idle_in_transaction_connections;
 } pg_stat_list;
 
 void postgres_stats_init(void);

@@ -244,9 +244,9 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "{\"hostname\":\"%s\",\"time\":%llu,\"sysname\":\"Linux: %s\",", s.hostname, ts, s.sysname);
 	evbuffer_add_printf(evb, "\"cpu_cores\":%d,\"postgresql\":{\"version\":\"%s\"", c.cpu_count, PG_VERSION);
 	evbuffer_add_printf(evb, ",\"role\":\"%s\",", p.recovery_in_progress?"replica":"master");
-	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d", DataDir, MaxConnections);
-	evbuffer_add_printf(evb, ",\"total\":%d,", p.total_connections);
-	evbuffer_add_printf(evb, "\"active\":%d},\"start_time\":%lu},", p.active_connections, pg_start_time);
+	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
+	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", p.total_connections, p.idle_in_transaction_connections);
+	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", p.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\":{\"uptime\":%d,\"load_average\":", (int)(s.uptime / SC_CLK_TCK));
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g],\"cpu\":{\"user\":", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "%2.1f,\"nice\": %2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
@@ -345,7 +345,12 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 				evbuffer_add_printf(evb, ",\"database\":%s", s.datname == NULL ? "null" : s.datname);
 			if (s.usename != NULL || s.type == PG_BACKEND)
 				evbuffer_add_printf(evb, ",\"username\":%s", s.usename == NULL ? "null" : s.usename);
-
+#if PG_VERSION_NUM >= 90600
+			if (s.raw_wait_event) {
+				evbuffer_add_printf(evb, ",\"wait_event_type\":\"%s\"", pgstat_get_wait_event_type(s.raw_wait_event));
+				evbuffer_add_printf(evb, ",\"wait_event\":\"%s\"", pgstat_get_wait_event(s.raw_wait_event));
+			}
+#endif
 			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0) {
 				if (s.idle_in_transaction_age < 10)
 					evbuffer_add_printf(evb, ",\"query\":\"idle in transaction %.2g\"", s.idle_in_transaction_age);
