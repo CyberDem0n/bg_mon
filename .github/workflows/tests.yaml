@@ -1,0 +1,70 @@
+name: ubuntu
+  
+on:
+  pull_request:
+  push:
+    branches:
+    - master
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      PG: ${{ matrix.postgres-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version:
+        - '9.3'
+        - '9.4'
+        - '9.5'
+        - '9.6'
+        - '10'
+        - '11'
+        - '12'
+        - '13'
+
+    steps:
+    - uses: actions/checkout@v1
+    - name: Set up packages
+      run: |
+        set -e
+        sudo apt-get update
+        sudo apt-get install -yq --no-install-suggests --no-install-recommends curl postgresql-common lcov libevent-dev pv brotli libbrotli1 libbrotli-dev
+        # forbid creation of a main cluster when package is installed
+        sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
+        sudo apt-get install -yq --no-install-suggests --no-install-recommends postgresql-$PG postgresql-server-dev-$PG
+
+    - name: Compile and install bg_mon
+      run: |
+        set -e
+        sudo make PG_CONFIG=/usr/lib/postgresql/$PG/bin/pg_config USE_PGXS=1 ENABLE_GCOV=1 install
+        sudo make PG_CONFIG=/usr/lib/postgresql/$PG/bin/pg_config USE_PGXS=1 ENABLE_GCOV=1 with_llvm=no clean all install
+
+    - name: Run tests
+      run: |
+        PATH=/usr/lib/postgresql/$PG/bin:$PATH bash -x test.sh
+        if grep -E '(ERROR|FATAL)' test_cluster?/*log/postgresql*.log | grep -Ev '(no COPY in progress|could not connect to|could not send|database system is shutting|error reading result of streaming command|database system is starting up)'; then exit 1; fi
+
+    - name: Generate lcov.info
+      run: |
+        gcov -lr *.[ch]
+        lcov --capture --directory . --no-external -o lcov.info
+
+    - name: Coveralls Parallel
+      uses: coverallsapp/github-action@master
+      with:
+        path-to-lcov: lcov.info
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        flag-name: ${{ matrix.postgres-version }}
+        parallel: true
+
+  finish:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Coveralls Finished
+      uses: coverallsapp/github-action@master
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        parallel-finished: true
