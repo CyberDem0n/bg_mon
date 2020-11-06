@@ -83,7 +83,7 @@ function curl_ps_loop() {
     curl -s http://localhost:$(($bport+$1))/$(date +'%s' -ud '1 hour ago') > /dev/null
     curl -s http://localhost:$(($bport+$1))/$(date | sed 's/ /+/g') > /dev/null
     curl -s http://localhost:$(($bport+$1))/now > /dev/null
-    curl -s http://localhost:$(($bport+$1))/garbadge > /dev/null
+    curl -s http://localhost:$(($bport+$1))/blablabla > /dev/null
 }
 
 function clone_cluster() {

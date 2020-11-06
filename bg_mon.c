@@ -85,9 +85,6 @@ static time_t parse_timestamp(const char *uri)
 	time_t ret = -1;
 	const char *str = uri + 1;
 
-	if (*uri != '/')
-		return ret;
-
 	if (strcmp(str, "now") == 0 || strcmp(str, "today") == 0 ||
 		strcmp(str, "tomorrow") == 0 || strcmp(str, "yesterday") == 0)
 		return ret;
