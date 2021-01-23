@@ -1,9 +1,11 @@
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "system_stats.h"
 
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
+#define PROC_PRESSURE "/proc/pressure/"
 
 extern char *cpu_cgroup_mount;
 static char *cpu_cgroup = NULL;
@@ -45,6 +47,78 @@ static int proc_read_int(const char *name)
 		fclose(f);
 	}
 	return ret;
+}
+
+/*
+ * Test if Linux Pressure Stall Information is available. Starting from linux
+ * kernel 4.20 it should manifest itself via /proc/pressure directory in procfs
+ * with cpu,memory,io files.
+ */
+static bool pressure_available()
+{
+	struct stat sb;
+	int res;
+
+	res = stat("/proc/pressure", &sb);
+	return (res != -1) && S_ISDIR(sb.st_mode);
+}
+
+/*
+ * Pressure stall information for specified resource. PSI format for Memory and
+ * IO:
+ *
+ *   some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+ *   full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+ *
+ * For CPU only "some" line is present.
+ *
+ * The result returned via pressure array passed as the first argument.
+ */
+static void read_pressure(pressure *result, pressure_res resource)
+{
+	FILE *f;
+
+	switch (resource)
+	{
+		case CPU:
+			f = fopen(PROC_PRESSURE "cpu", "r");
+			break;
+		case MEMORY:
+			f = fopen(PROC_PRESSURE "memory", "r");
+			break;
+		case IO:
+			f = fopen(PROC_PRESSURE "io", "r");
+			break;
+		default:
+			return;
+	}
+
+	if (f != NULL) {
+		char type[PTYPE_SIZE];
+		pressure p = {0, };
+
+		/* There could be either one or two lines */
+		for (int i = 0; i < 2; i++)
+		{
+			if (fscanf(f, "%s avg10=%f avg60=%f avg300=%f total=%f",
+					   type, &p.avg10, &p.avg60, &p.avg300, &p.total) != 5)
+				break;
+
+			if (strncmp(type, "some", 4) == 0)
+				p.type = SOME;
+
+			if (strncmp(type, "full", 4) == 0)
+				p.type = FULL;
+
+			/* Undefined should not happen, but check just in case */
+			if (p.type == UNDEFINED)
+				break;
+
+			result[i] = p;
+		}
+
+		fclose(f);
+	}
 }
 
 static load_avg read_load_avg(void)
@@ -355,6 +429,17 @@ system_stat get_system_stats(void)
 	if (system_stats.uptime == 0)
 		system_stats.uptime = system_stats.cpu.uptime0;
 	system_stats.load_avg = read_load_avg();
+
+	if (pressure_available())
+	{
+		system_stats.pressure = true;
+		read_pressure((pressure *) &system_stats.p_cpu, CPU);
+		read_pressure((pressure *) &system_stats.p_memory, MEMORY);
+		read_pressure((pressure *) &system_stats.p_io, IO);
+	}
+	else
+		system_stats.pressure = false;
+
 	system_stats.mem = read_meminfo();
 	system_stats.sysname = sysname;
 	system_stats.hostname = get_hostname();

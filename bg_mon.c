@@ -284,6 +284,9 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	cpu_stat c = s.cpu;
 	meminfo m = s.mem;
 	load_avg la = s.load_avg;
+	pressure *p_cpu = s.p_cpu;
+	pressure *p_memory = s.p_memory;
+	pressure *p_io = s.p_io;
 
 	bool is_first = true;
 	size_t i;
@@ -298,8 +301,20 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g],\"cpu\":{\"user\":", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "%2.1f,\"nice\": %2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
 	evbuffer_add_printf(evb, "\"idle\":%2.1f,\"iowait\":%2.1f,\"steal\":%2.1f", c.idle_diff, c.iowait_diff, c.steal_diff);
-	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\":", s.ctxt_diff, s.procs_running);
-	evbuffer_add_printf(evb, " %lu},\"memory\":{\"total\":%lu,\"free\":%lu,", s.procs_blocked, m.total, m.free);
+	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\": %lu}", s.ctxt_diff, s.procs_running, s.procs_blocked);
+
+	if (s.pressure) {
+		evbuffer_add_printf(evb, ",\"pressure\":{\"cpu\":[%4.6g, %4.6g, %4.6g, %4.6g],",
+							p_cpu[0].avg10, p_cpu[0].avg60, p_cpu[0].avg300, p_cpu[0].total);
+		evbuffer_add_printf(evb, "\"memory\":{\"some\":[%4.6g, %4.6g, %4.6g, %4.6g],\"full\":[%4.6g, %4.6g, %4.6g, %4.6g]},",
+							p_memory[0].avg10, p_memory[0].avg60, p_memory[0].avg300, p_memory[0].total,
+							p_memory[1].avg10, p_memory[1].avg60, p_memory[1].avg300, p_memory[1].total);
+		evbuffer_add_printf(evb, "\"io\":{\"some\":[%4.6g, %4.6g, %4.6g, %4.6g],\"full\":[%4.6g, %4.6g, %4.6g, %4.6g]}}",
+							p_io[0].avg10, p_io[0].avg60, p_io[0].avg300, p_io[0].total,
+							p_io[1].avg10, p_io[1].avg60, p_io[1].avg300, p_io[1].total);
+	}
+
+	evbuffer_add_printf(evb, ",\"memory\":{\"total\":%lu,\"free\":%lu,", m.total, m.free);
 	evbuffer_add_printf(evb, "\"buffers\":%lu,\"cached\":%lu,\"dirty\":%lu", m.buffers, m.cached, m.dirty);
 
 	if (m.overcommit.memory == 2) {

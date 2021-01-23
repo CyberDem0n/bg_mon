@@ -18,6 +18,50 @@ typedef struct {
 	float run_15min;
 } load_avg;
 
+#define PTYPE_SIZE 4
+
+/*
+ * The PSI feature identifies and quantifies the disruptions caused by resource
+ * contention and the time impact it has on complex workloads or even entire
+ * systems. This information is exposed in time shares, the ratios (in %) are
+ * tracked as recent trends over ten, sixty, three hundred second windows.
+ * Total time is exposed as well in us (1.0E-6 seconds).
+ *
+ * Monitored resources are cpu, memory or io. Pressure types:
+ *
+ * - "some" indicates the share of time in which at least some tasks are
+ *   stalled on a given resource, but the CPU is still doing productive work.
+ *
+ * - "full" indicates the share of time in which all non-idle tasks are stalled
+ *   on a given resource simultaneously. In this state actual CPU cycles are
+ *   going to waste, and a workload that spends extended time in this state is
+ *   considered to be thrashing.
+ *
+ * Pressure for CPU contains only type "some", while Memory and IO have both
+ * types.
+ */
+typedef enum pressure_type
+{
+	UNDEFINED = 0,
+	SOME,
+	FULL,
+} pressure_type;
+
+typedef enum pressure_res
+{
+	CPU = 0,
+	MEMORY,
+	IO,
+} pressure_res;
+
+typedef struct {
+	pressure_type type;
+	float avg10;
+	float avg60;
+	float avg300;
+	float total;
+} pressure;
+
 typedef struct {
 	int memory;
 	int ratio;
@@ -90,6 +134,10 @@ typedef struct {
 	cpu_stat cpu;
 	load_avg load_avg;
 	meminfo mem;
+	bool pressure;			// tells if PSI information is available
+	pressure p_cpu[1];		// PSI for CPU (only of type "some")
+	pressure p_memory[2];	// PSI for Memory (pair "some", "full")
+	pressure p_io[2];		// PSI for IO (pair "some", "full")
 	char *sysname;
 	char *hostname;
 } system_stat;
