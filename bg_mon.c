@@ -234,7 +234,8 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	struct evbuffer *evb = evbuffer_new();
 	unsigned long long ts = (unsigned long long)time.tv_sec*1000 + (unsigned long long)((double)time.tv_usec/1000.0);
 
-        pg_stat_activity_list a = p.activity;
+	pg_stat_activity_list a = p.activity;
+	db_stat_list d = p.db;
 	cpu_stat c = s.cpu;
 	meminfo m = s.mem;
 	load_avg la = s.load_avg;
@@ -288,6 +289,39 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 		evbuffer_add_printf(evb, "},\"directory\":{\"name\":\"%s\",\"size\":%llu}}", device.directory, device.du);
 	}
 
+	if (d.pos > 0) {
+		evbuffer_add_printf(evb, "},\"databases\":{");
+		for (i = 0; i < d.pos; ++i) {
+			if (is_first) is_first = false;
+			else evbuffer_add_printf(evb, ",");
+			evbuffer_add_printf(evb, "%s:{", d.values[i].datname);
+			evbuffer_add_printf(evb, "\"xact_commit\":%ld,", d.values[i].n_xact_commit_diff);
+			evbuffer_add_printf(evb, "\"xact_rollback\":%ld,", d.values[i].n_xact_rollback_diff);
+			evbuffer_add_printf(evb, "\"blocks_fetched\":%ld,", d.values[i].n_blocks_fetched_diff);
+			evbuffer_add_printf(evb, "\"blocks_hit\":%ld,", d.values[i].n_blocks_hit_diff);
+			evbuffer_add_printf(evb, "\"tuples_returned\":%ld,", d.values[i].n_tuples_returned_diff);
+			evbuffer_add_printf(evb, "\"tuples_fetched\":%ld,", d.values[i].n_tuples_fetched_diff);
+			evbuffer_add_printf(evb, "\"tuples_updated\":%ld,", d.values[i].n_tuples_updated_diff);
+			evbuffer_add_printf(evb, "\"tuples_inserted\":%ld,", d.values[i].n_tuples_inserted_diff);
+			evbuffer_add_printf(evb, "\"conflict_tablespace\":%ld,", d.values[i].n_conflict_tablespace_diff);
+			evbuffer_add_printf(evb, "\"tuples_deleted\":%ld,", d.values[i].n_tuples_deleted_diff);
+			evbuffer_add_printf(evb, "\"conflict_lock\":%ld,", d.values[i].n_conflict_lock_diff);
+			evbuffer_add_printf(evb, "\"conflict_snapshot\":%ld,", d.values[i].n_conflict_snapshot_diff);
+			evbuffer_add_printf(evb, "\"conflict_bufferpin\":%ld,", d.values[i].n_conflict_bufferpin_diff);
+			evbuffer_add_printf(evb, "\"conflict_startup_deadlock\":%ld,", d.values[i].n_conflict_startup_deadlock_diff);
+			evbuffer_add_printf(evb, "\"temp_files\":%ld,", d.values[i].n_temp_files_diff);
+			evbuffer_add_printf(evb, "\"temp_bytes\":%ld,", d.values[i].n_temp_bytes_diff);
+			evbuffer_add_printf(evb, "\"deadlocks\":%ld,", d.values[i].n_deadlocks_diff);
+#if PG_VERSION_NUM >= 120000
+			evbuffer_add_printf(evb, "\"checksum_failures\":%ld,", d.values[i].n_checksum_failures);
+			evbuffer_add_printf(evb, "\"last_checksum_failure\":%lu,", d.values[i].last_checksum_failure);
+#endif
+			evbuffer_add_printf(evb, "\"block_read_time\":%ld,", d.values[i].n_block_read_time_diff); /* times in microseconds */
+			evbuffer_add_printf(evb, "\"block_write_time\":%ld}", d.values[i].n_block_write_time_diff);
+		}
+	}
+
+	is_first = true;
 	evbuffer_add_printf(evb, "},\"net_stats\":{");
 	for (i = 0; i < ns.size; ++i)
 		if (ns.values[i].is_used && ns.values[i].has_statistics) {

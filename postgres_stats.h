@@ -105,26 +105,47 @@ typedef struct {
 	Oid databaseid;
 	char *datname;
 	int64 n_xact_commit;
+	int64 n_xact_commit_diff;
 	int64 n_xact_rollback;
+	int64 n_xact_rollback_diff;
 	int64 n_blocks_fetched;
+	int64 n_blocks_fetched_diff;
 	int64 n_blocks_hit;
+	int64 n_blocks_hit_diff;
 	int64 n_tuples_returned;
+	int64 n_tuples_returned_diff;
 	int64 n_tuples_fetched;
-	int64 n_tuples_inserted;
+	int64 n_tuples_fetched_diff;
 	int64 n_tuples_updated;
-	int64 n_tuples_deleted;
+	int64 n_tuples_updated_diff;
+	int64 n_tuples_inserted;
+	int64 n_tuples_inserted_diff;
 	int64 n_conflict_tablespace;
+	int64 n_conflict_tablespace_diff;
+	int64 n_tuples_deleted;
+	int64 n_tuples_deleted_diff;
 	int64 n_conflict_lock;
+	int64 n_conflict_lock_diff;
 	int64 n_conflict_snapshot;
+	int64 n_conflict_snapshot_diff;
 	int64 n_conflict_bufferpin;
+	int64 n_conflict_bufferpin_diff;
 	int64 n_conflict_startup_deadlock;
+	int64 n_conflict_startup_deadlock_diff;
 	int64 n_temp_files;
+	int64 n_temp_files_diff;
 	int64 n_temp_bytes;
+	int64 n_temp_bytes_diff;
 	int64 n_deadlocks;
+	int64 n_deadlocks_diff;
+#if PG_VERSION_NUM >= 120000
 	int64 n_checksum_failures;
 	TimestampTz last_checksum_failure;
+#endif
 	int64 n_block_read_time;       /* times in microseconds */
+	int64 n_block_read_time_diff;
 	int64 n_block_write_time;
+	int64 n_block_write_time_diff;
 } db_stat;
 
 typedef struct {
@@ -137,6 +158,7 @@ typedef struct {
 	unsigned long long uptime;
 	bool recovery_in_progress;
 	pg_stat_activity_list activity;
+	db_stat_list db;
 } pg_stat;
 
 void postgres_stats_init(void);

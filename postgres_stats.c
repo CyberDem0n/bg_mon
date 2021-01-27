@@ -6,6 +6,7 @@
 #include "miscadmin.h"
 
 #include "access/htup_details.h"
+#include "access/heapam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "executor/spi.h"
@@ -20,6 +21,9 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#if PG_VERSION_NUM < 90400
+#include "utils/tqual.h"
+#endif
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
@@ -327,7 +331,7 @@ static void pg_stat_activity_list_init(pg_stat_activity_list *list)
 	list->values = palloc(sizeof(pg_stat_activity) * list->size);
 }
 
-static void pg_stat_list_free_resources(pg_stat_activity_list *list)
+static void pg_stat_activity_list_free_resources(pg_stat_activity_list *list)
 {
 	size_t i;
 	for (i = 0; i < list->pos; ++i) {
@@ -344,7 +348,7 @@ static void pg_stat_list_free_resources(pg_stat_activity_list *list)
 	list->pos = 0;
 }
 
-static bool pg_stat_list_add(pg_stat_activity_list *list, pg_stat_activity ps)
+static void pg_stat_activity_list_add(pg_stat_activity_list *list, pg_stat_activity ps)
 {
 	if (list->values == NULL)
 		list->pos = list->size = 0;
@@ -355,7 +359,34 @@ static bool pg_stat_list_add(pg_stat_activity_list *list, pg_stat_activity ps)
 		list->values = repalloc(list->values, sizeof(pg_stat_activity)*new_size);
 	}
 	list->values[list->pos++] = ps;
-	return true;
+}
+
+static void db_stat_list_init(db_stat_list *list)
+{
+	list->pos = 0;
+	list->size = 3;
+	list->values = palloc(sizeof(db_stat) * list->size);
+}
+
+static void db_stat_list_free_resources(db_stat_list *list)
+{
+	size_t i;
+	for (i = 0; i < list->pos; ++i)
+		FREE(list->values[i].datname);
+	list->pos = 0;
+}
+
+static void db_stat_list_add(db_stat_list *list, db_stat ds)
+{
+	if (list->values == NULL)
+		list->pos = list->size = 0;
+
+	if (list->pos >= list->size) {
+		int new_size = list->size > 0 ? list->size * 2 : 7;
+		list->size = new_size;
+		list->values = repalloc(list->values, sizeof(db_stat)*new_size);
+	}
+	list->values[list->pos++] = ds;
 }
 
 static size_t json_escaped_size(const char *s, size_t len)
@@ -622,6 +653,11 @@ static int pg_stat_activity_cmp(const void *el1, const void *el2)
 	return ((const pg_stat_activity *) el1)->pid - ((const pg_stat_activity *) el2)->pid;
 }
 
+static int db_stat_cmp(const void *el1, const void *el2)
+{
+	return ((const db_stat *) el1)->databaseid - ((const db_stat *) el2)->databaseid;
+}
+
 static void read_procfs(proc_stat_list *list)
 {
 	DIR *proc;
@@ -685,7 +721,7 @@ static void merge_stats(pg_stat_activity_list *pg_stats, proc_stat_list proc_sta
 			pgs.ps = proc_stats.values[proc_stats_pos];
 			pgs.pid = pgs.ps.pid;
 			pgs.type = PG_UNDEFINED; /* unknown process */
-			pg_stat_list_add(pg_stats, pgs);
+			pg_stat_activity_list_add(pg_stats, pgs);
 			++proc_stats_pos;
 		} else if (pg_stats->values[pg_stats_pos].pid == proc_stats.values[proc_stats_pos].pid) {
 			pg_stats->values[pg_stats_pos++].ps = proc_stats.values[proc_stats_pos++];
@@ -872,6 +908,40 @@ static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_ac
 	}
 }
 
+static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned long long itv)
+{
+	size_t old_pos = 0, new_pos = 0;
+
+	while (old_pos < old_db.pos && new_pos < new_db.pos) {
+		if (old_db.values[old_pos].databaseid == new_db.values[new_pos].databaseid) {
+			new_db.values[new_pos].n_xact_commit_diff = S_VALUE(old_db.values[old_pos].n_xact_commit, new_db.values[new_pos].n_xact_commit, itv);
+			new_db.values[new_pos].n_xact_rollback_diff = S_VALUE(old_db.values[old_pos].n_xact_rollback, new_db.values[new_pos].n_xact_rollback, itv);
+			new_db.values[new_pos].n_blocks_fetched_diff = S_VALUE(old_db.values[old_pos].n_blocks_fetched, new_db.values[new_pos].n_blocks_fetched, itv);
+			new_db.values[new_pos].n_blocks_hit_diff = S_VALUE(old_db.values[old_pos].n_blocks_hit, new_db.values[new_pos].n_blocks_hit, itv);
+			new_db.values[new_pos].n_tuples_returned_diff = S_VALUE(old_db.values[old_pos].n_tuples_returned, new_db.values[new_pos].n_tuples_returned, itv);
+			new_db.values[new_pos].n_tuples_fetched_diff = S_VALUE(old_db.values[old_pos].n_tuples_fetched, new_db.values[new_pos].n_tuples_fetched, itv);
+			new_db.values[new_pos].n_tuples_updated_diff = S_VALUE(old_db.values[old_pos].n_tuples_updated, new_db.values[new_pos].n_tuples_updated, itv);
+			new_db.values[new_pos].n_tuples_inserted_diff = S_VALUE(old_db.values[old_pos].n_tuples_inserted, new_db.values[new_pos].n_tuples_inserted, itv);
+			new_db.values[new_pos].n_conflict_tablespace_diff = S_VALUE(old_db.values[old_pos].n_conflict_tablespace, new_db.values[new_pos].n_conflict_tablespace, itv);
+			new_db.values[new_pos].n_tuples_deleted_diff = S_VALUE(old_db.values[old_pos].n_tuples_deleted, new_db.values[new_pos].n_tuples_deleted, itv);
+			new_db.values[new_pos].n_conflict_lock_diff = S_VALUE(old_db.values[old_pos].n_conflict_lock, new_db.values[new_pos].n_conflict_lock, itv);
+			new_db.values[new_pos].n_conflict_snapshot_diff = S_VALUE(old_db.values[old_pos].n_conflict_snapshot, new_db.values[new_pos].n_conflict_snapshot, itv);
+			new_db.values[new_pos].n_conflict_bufferpin_diff = S_VALUE(old_db.values[old_pos].n_conflict_bufferpin, new_db.values[new_pos].n_conflict_bufferpin, itv);
+			new_db.values[new_pos].n_conflict_startup_deadlock_diff = S_VALUE(old_db.values[old_pos].n_conflict_startup_deadlock, new_db.values[new_pos].n_conflict_startup_deadlock, itv);
+			new_db.values[new_pos].n_temp_files_diff = S_VALUE(old_db.values[old_pos].n_temp_files, new_db.values[new_pos].n_temp_files, itv);
+			new_db.values[new_pos].n_temp_bytes_diff = S_VALUE(old_db.values[old_pos].n_temp_bytes, new_db.values[new_pos].n_temp_bytes, itv);
+			new_db.values[new_pos].n_deadlocks_diff = S_VALUE(old_db.values[old_pos].n_deadlocks, new_db.values[new_pos].n_deadlocks, itv);
+			new_db.values[new_pos].n_block_read_time_diff = S_VALUE(old_db.values[old_pos].n_block_read_time, new_db.values[new_pos].n_block_read_time, itv);
+			new_db.values[new_pos].n_block_write_time_diff = S_VALUE(old_db.values[old_pos].n_block_write_time, new_db.values[new_pos].n_block_write_time, itv);
+			old_pos++;
+			new_pos++;
+		} else if (old_db.values[old_pos].databaseid > new_db.values[new_pos].databaseid)
+			new_pos++;
+		else /* old_db.values[old_pos].databaseid < new_db.values[new_pos].databaseid */
+			old_pos++;
+	}
+}
+
 static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 {
 	unsigned long long itv;
@@ -880,6 +950,7 @@ static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 	itv = new_stats.uptime - old_stats.uptime;
 
 	diff_pg_stat_activity(old_stats.activity, new_stats.activity, itv);
+	diff_db_stats(old_stats.db, new_stats.db, itv);
 }
 
 static double calculate_age(TimestampTz ts)
@@ -1030,7 +1101,7 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 				ps.age = calculate_age(beentry->st_activity_start_timestamp);
 			else ps.age = -1;
 
-			pg_stat_list_add(pg_stats, ps);
+			pg_stat_activity_list_add(pg_stats, ps);
 		}
 	}
 
@@ -1073,7 +1144,7 @@ static void resolve_database_and_user_ids(pg_stat_activity_list activity, Memory
 				if (HeapTupleIsValid(roleTup))
 				{
 					oldcxt = MemoryContextSwitchTo(resultcxt);
-					ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
+					ps->usename = json_escape_string(NameStr(((Form_pg_authid) GETSTRUCT(roleTup))->rolname));
 					MemoryContextSwitchTo(oldcxt);
 					ReleaseSysCache(roleTup);
 				}
@@ -1085,7 +1156,7 @@ static void resolve_database_and_user_ids(pg_stat_activity_list activity, Memory
 				if (HeapTupleIsValid(databaseTup))
 				{
 					oldcxt = MemoryContextSwitchTo(resultcxt);
-					ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
+					ps->datname = json_escape_string(NameStr(((Form_pg_database) GETSTRUCT(databaseTup))->datname));
 					MemoryContextSwitchTo(oldcxt);
 					ReleaseSysCache(databaseTup);
 				}
@@ -1094,13 +1165,87 @@ static void resolve_database_and_user_ids(pg_stat_activity_list activity, Memory
 	}
 }
 
+static void get_database_stats(db_stat_list *db, MemoryContext resultcxt)
+{
+#if PG_VERSION_NUM < 120000
+	Relation rel = heap_open(DatabaseRelationId, AccessShareLock);
+#else
+	Relation rel = table_open(DatabaseRelationId, AccessShareLock);
+#endif
+#if PG_VERSION_NUM < 90400
+	HeapScanDesc scan = heap_beginscan(rel, SnapshotNow, 0, NULL);
+#elif PG_VERSION_NUM < 120000
+	HeapScanDesc scan = heap_beginscan_catalog(rel, 0, NULL);
+#else
+	TableScanDesc scan = table_beginscan_catalog(rel, 0, NULL);
+#endif
+	HeapTuple tup;
+
+	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
+	{
+		Form_pg_database pgdatabase = (Form_pg_database) GETSTRUCT(tup);
+#if PG_VERSION_NUM < 120000
+		Oid oid = HeapTupleGetOid(tup);
+#else
+		Oid oid = pgdatabase->oid;
+#endif
+		PgStat_StatDBEntry *dbentry = pgstat_fetch_stat_dbentry(oid);
+
+		if (dbentry != NULL)
+		{
+			MemoryContext oldcxt = MemoryContextSwitchTo(resultcxt);
+
+			db_stat ds = {0,};
+			ds.databaseid = oid;
+			ds.datname = json_escape_string(NameStr(pgdatabase->datname));
+
+			ds.n_xact_commit = (int64) (dbentry->n_xact_commit);
+			ds.n_xact_rollback = (int64) (dbentry->n_xact_rollback);
+			ds.n_blocks_fetched = (int64) (dbentry->n_blocks_fetched);
+			ds.n_blocks_hit = (int64) (dbentry->n_blocks_hit);
+			ds.n_tuples_returned = (int64) (dbentry->n_tuples_returned);
+			ds.n_tuples_fetched = (int64) (dbentry->n_tuples_fetched);
+			ds.n_tuples_inserted = (int64) (dbentry->n_tuples_inserted);
+			ds.n_tuples_updated = (int64) (dbentry->n_tuples_updated);
+			ds.n_tuples_deleted = (int64) (dbentry->n_tuples_deleted);
+			ds.n_conflict_tablespace = (int64) (dbentry->n_conflict_tablespace);
+			ds.n_conflict_lock = (int64) (dbentry->n_conflict_lock);
+			ds.n_conflict_snapshot = (int64) (dbentry->n_conflict_snapshot);
+			ds.n_conflict_bufferpin = (int64) (dbentry->n_conflict_bufferpin);
+			ds.n_conflict_startup_deadlock = (int64) (dbentry->n_conflict_startup_deadlock);
+			ds.n_temp_files = (int64) (dbentry->n_temp_files);
+			ds.n_temp_bytes = (int64) (dbentry->n_temp_bytes);
+			ds.n_deadlocks = (int64) (dbentry->n_deadlocks);
+#if PG_VERSION_NUM >= 120000
+			ds.n_checksum_failures = (int64) (dbentry->n_checksum_failures);
+			ds.last_checksum_failure = (int64) (dbentry->last_checksum_failure);
+#endif
+			ds.n_block_read_time = (int64) (dbentry->n_block_read_time); /* times in microseconds */
+			ds.n_block_write_time = (int64) (dbentry->n_block_write_time);
+
+			db_stat_list_add(db, ds);
+
+			MemoryContextSwitchTo(oldcxt);
+		}
+	}
+
+#if PG_VERSION_NUM < 120000
+	heap_endscan(scan);
+	heap_close(rel, AccessShareLock);
+#else
+	table_endscan(scan);
+	table_close(rel, AccessShareLock);
+#endif
+}
+
 pg_stat get_postgres_stats(void)
 {
 	pg_stat pg_stats_tmp;
 
 	read_procfs(&proc_stats);
 
-	pg_stat_list_free_resources(&pg_stats_new.activity);
+	pg_stat_activity_list_free_resources(&pg_stats_new.activity);
+	db_stat_list_free_resources(&pg_stats_new.db);
 
 	get_pg_stat_activity(&pg_stats_new.activity);
 
@@ -1111,6 +1256,7 @@ pg_stat get_postgres_stats(void)
 		(void) GetTransactionSnapshot();
 
 		resolve_database_and_user_ids(pg_stats_new.activity, resultcxt);
+		get_database_stats(&pg_stats_new.db, resultcxt);
 
 		CommitTransactionCommand();
 		MemoryContextSwitchTo(resultcxt);
@@ -1121,6 +1267,9 @@ pg_stat get_postgres_stats(void)
 	pg_stats_new.recovery_in_progress = RecoveryInProgress();
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
+
+	if (pg_stats_new.db.pos > 1)
+		qsort(pg_stats_new.db.values, pg_stats_new.db.pos, sizeof(db_stat), db_stat_cmp);
 
 	diff_pg_stats(pg_stats_current, pg_stats_new);
 
@@ -1136,6 +1285,8 @@ void postgres_stats_init(void)
 	mem_page_size = getpagesize() / 1024;
 	pg_stat_activity_list_init(&pg_stats_current.activity);
 	pg_stat_activity_list_init(&pg_stats_new.activity);
+	db_stat_list_init(&pg_stats_current.db);
+	db_stat_list_init(&pg_stats_new.db);
 
 	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.activity.size));
 
