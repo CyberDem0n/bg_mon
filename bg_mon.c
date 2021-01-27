@@ -62,7 +62,7 @@ struct aggregated_stats {
 	struct compression_state state;
 };
 static struct aggregated_stats *aggregated;
-static time_t prev_minute = 0;
+static struct aggregated_stats *prev = NULL;
 
 static bool accepts_brotli(struct evhttp_request *req)
 {
@@ -94,6 +94,53 @@ static int parse_bucket_request(const char *uri)
 	} while (*(++p));
 
 	return ret;
+}
+
+static time_t round_minute(time_t time)
+{
+	struct tm *tm = gmtime(&time);
+	return time - tm->tm_sec;
+}
+
+static bool send_aggregated_data(struct evhttp_request *req, struct aggregated_stats *agg)
+{
+	bool ret = false;
+	struct evbuffer *evb;
+
+	pthread_mutex_lock(&agg_lock);
+	if ((ret = agg != NULL)) {
+		if (!agg->state.is_flushed && !agg->state.is_finished)
+			brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
+
+		evb = evbuffer_new();
+		evbuffer_add(evb, agg->state.to, agg->state.pos);
+	}
+	pthread_mutex_unlock(&agg_lock);
+
+	if (ret) {
+		struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
+		evhttp_add_header(output_headers, "Content-Type", "application/json");
+		evhttp_add_header(output_headers, "Content-Encoding", "br");
+		evhttp_send_reply(req, 200, "OK", evb);
+		evbuffer_free(evb);
+	}
+	return ret;
+}
+
+static bool send_aggregated_bucket(struct evhttp_request *req, struct aggregated_stats *agg)
+{
+	if (agg == NULL || (time(NULL) - agg->minute)/60 > bg_mon_num_buckets)
+		return false;
+
+	return send_aggregated_data(req, agg);
+}
+
+static bool send_aggregated_bucket_num(struct evhttp_request *req, int bucket)
+{
+	if (bucket < 0 || bucket >= bg_mon_num_buckets)
+		return false;
+
+	return send_aggregated_bucket(req, aggregated + bucket);
 }
 #endif
 
@@ -409,23 +456,11 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
 #ifdef HAS_LIBBROTLI
 	int bucket;
-	if (bg_mon_num_buckets > 0 && (bucket = parse_bucket_request(uri)) > -1) {
-		if (bucket < bg_mon_num_buckets) {
-			struct aggregated_stats *agg = aggregated + bucket;
-			if ((time(NULL) - agg->minute)/60 <= bg_mon_num_buckets) {
-				struct evbuffer *evb = evbuffer_new();
-				pthread_mutex_lock(&agg_lock);
-				if (!agg->state.is_flushed && !agg->state.is_finished)
-					brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
-				evbuffer_add(evb, agg->state.to, agg->state.pos);
-				pthread_mutex_unlock(&agg_lock);
-				evhttp_add_header(output_headers, "Content-Type", "application/json");
-				evhttp_add_header(output_headers, "Content-Encoding", "br");
-				evhttp_send_reply(req, 200, "OK", evb);
-				evbuffer_free(evb);
-			} else err = true;
-		} else err = true;
-	} else
+	if (bg_mon_num_buckets > 0 && (bucket = parse_bucket_request(uri)) > -1)
+		err = !send_aggregated_bucket_num(req, bucket);
+	else if (strcmp(uri, "/prev") == 0)
+		err = !send_aggregated_bucket(req, prev);
+	else
 #endif
 	if (strncmp(uri, "/ui", 3)) {
 		pthread_mutex_lock(&lock);
@@ -482,32 +517,32 @@ static void *webapi(void *arg)
 #ifdef HAS_LIBBROTLI
 static void update_aggregated_statistics(time_t time)
 {
-	struct tm *tm = gmtime(&time);
-	time_t minute = time - tm->tm_sec;
-	struct aggregated_stats *agg;
-
-	if (prev_minute == 0)
-		prev_minute = minute - (tm->tm_sec == 0 ? 60 : 0);
-
-	agg = aggregated + (prev_minute/60) % bg_mon_num_buckets;
+	static struct aggregated_stats *current = NULL;
+	time_t minute = round_minute(time);
+	struct aggregated_stats *agg = aggregated + ((minute/60) % bg_mon_num_buckets);
 
 	pthread_mutex_lock(&agg_lock);
-	if (agg->minute != prev_minute) {
-		if (agg->minute)
-			brotli_dealloc(&agg->state);
+
+	if (current == agg && current->minute != minute) {
+		brotli_dealloc(&current->state);
+		prev = current = NULL;
+	}
+
+	if (agg != current) {
+		if (current != NULL) {
+			brotli_compress_data(&current->state, (const unsigned char *)"]", 1, BROTLI_OPERATION_FINISH);
+			prev = current;
+		}
+		current = agg;
 		brotli_init(&agg->state, 7);
 		brotli_compress_data(&agg->state, (const unsigned char *)"[", 1, BROTLI_OPERATION_PROCESS);
-		agg->minute = prev_minute;
+		agg->minute = minute;
 	} else
 		brotli_compress_data(&agg->state, (const unsigned char *)",", 1, BROTLI_OPERATION_PROCESS);
 
 	brotli_compress_evbuffer(&agg->state, evbuffer, BROTLI_OPERATION_PROCESS);
 
-	if (prev_minute != minute)
-		brotli_compress_data(&agg->state, (const unsigned char *)"]", 1, BROTLI_OPERATION_FINISH);
 	pthread_mutex_unlock(&agg_lock);
-
-	prev_minute = minute;
 }
 #endif
 

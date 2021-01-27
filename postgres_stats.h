@@ -138,10 +138,8 @@ typedef struct {
 	int64 n_temp_bytes_diff;
 	int64 n_deadlocks;
 	int64 n_deadlocks_diff;
-#if PG_VERSION_NUM >= 120000
 	int64 n_checksum_failures;
 	TimestampTz last_checksum_failure;
-#endif
 	int64 n_block_read_time;       /* times in microseconds */
 	int64 n_block_read_time_diff;
 	int64 n_block_write_time;
