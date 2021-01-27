@@ -301,7 +301,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "%2.1f,\"nice\": %2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
 	evbuffer_add_printf(evb, "\"idle\":%2.1f,\"iowait\":%2.1f,\"steal\":%2.1f", c.idle_diff, c.iowait_diff, c.steal_diff);
 	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\":", s.ctxt_diff, s.procs_running);
-	evbuffer_add_printf(evb, " %lu},\"memory\":{\"total\":%lu,\"free\":%lu,", s.procs_blocked, m.total, m.free);
+	evbuffer_add_printf(evb, "%lu},\"memory\":{\"total\":%lu,\"free\":%lu,", s.procs_blocked, m.total, m.free);
 	evbuffer_add_printf(evb, "\"buffers\":%lu,\"cached\":%lu,\"dirty\":%lu", m.buffers, m.cached, m.dirty);
 
 	if (m.overcommit.memory == 2) {
