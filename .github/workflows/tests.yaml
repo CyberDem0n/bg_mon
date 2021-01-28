@@ -38,7 +38,7 @@ jobs:
     - name: Download noisia
       run: |
         VERSION=0.1.0
-        curl -sL https://github.com/lesovsky/noisia/releases/download/v$VERSION/noisia_$VERSION_linux_amd64.tar.gz | tar xzv noisia
+        curl -sL https://github.com/lesovsky/noisia/releases/download/v$VERSION/noisia_${VERSION}_linux_amd64.tar.gz | tar xzv noisia
 
     - name: Compile and install bg_mon
       run: |
