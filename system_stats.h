@@ -134,10 +134,12 @@ typedef struct {
 	cpu_stat cpu;
 	load_avg load_avg;
 	meminfo mem;
-	bool pressure;			// tells if PSI information is available
-	pressure p_cpu[1];		// PSI for CPU (only of type "some")
-	pressure p_memory[2];	// PSI for Memory (pair "some", "full")
-	pressure p_io[2];		// PSI for IO (pair "some", "full")
+	bool pressure;			/* tells if PSI information is available */
+	pressure p_cpu[2];		/* PSI for CPU. Only of type "some" is used, but
+							   for consistensy with other resources defined as
+							   two elements array. */
+	pressure p_memory[2];	/* PSI for Memory (pair "some", "full") */
+	pressure p_io[2];		/* PSI for IO (pair "some", "full") */
 	char *sysname;
 	char *hostname;
 } system_stat;
