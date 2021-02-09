@@ -38,6 +38,16 @@ function start_postgres() {
     while ! pg_isready -h localhost -p $(($port+$1)) -d postgres; do
         [[ $((max_attempts++)) -lt 10 ]] && sleep 1 || exit 1
     done
+
+    if [ -x ./noisia ]; then
+        if [ "$1" = "1" ]; then
+            OPTS=""
+        else
+            OPTS="--deadlocks --wait-xacts --temp-files --rollbacks"
+            psql -h localhost -c 'CREATE USER noisia' -p $(($port+$1)) postgres
+        fi
+        ./noisia --jobs=5 --duration=30 --idle-xacts $OPTS --conninfo="host=localhost port=$(($port+$1)) user=noisia dbname=postgres application_name=noisia" > noisia.$1.log 2>&1 &
+    fi
 }
 
 function create_cluster() {
@@ -47,6 +57,9 @@ host replication all ::1/128 trust" >> test_cluster$1/pg_hba.conf
     echo "unix_socket_directories = '.'
 hot_standby = 'on'
 logging_collector = 'on'
+log_directory = 'pg_log'
+log_line_prefix = '%u %m [%p] '
+log_filename = 'postgresql.log'
 archive_mode = 'on'
 archive_command = 'true'
 max_wal_senders = 10
