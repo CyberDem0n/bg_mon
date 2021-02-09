@@ -294,6 +294,13 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "{\"hostname\":\"%s\",\"time\":%llu,\"sysname\":\"Linux: %s\",", s.hostname, ts, s.sysname);
 	evbuffer_add_printf(evb, "\"cpu_cores\":%d,\"postgresql\":{\"version\":\"%s\"", c.cpu_count, PG_VERSION);
 	evbuffer_add_printf(evb, ",\"role\":\"%s\",", p.recovery_in_progress?"replica":"master");
+
+	evbuffer_add_printf(evb, "\"wal_metrics\":{\"is_wal_replay_paused\":%s,", p.wal.is_wal_replay_paused?"true":"false");
+
+	evbuffer_add_printf(evb, "\"last_wal_replay_lsn\":%ld,", p.wal.last_wal_replay_lsn);
+	evbuffer_add_printf(evb, "\"current_wal_lsn\":%ld,", p.wal.current_wal_lsn);
+	evbuffer_add_printf(evb, "\"last_wal_receive_lsn\":%ld,", p.wal.last_wal_receive_lsn);
+	evbuffer_add_printf(evb, "\"last_xact_replay_timestamp\":%ld},", p.wal.last_xact_replay_timestamp);
 	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", p.total_connections, p.idle_in_transaction_connections);
 	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", p.active_connections, pg_start_time);

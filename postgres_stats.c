@@ -24,6 +24,8 @@
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
 
+#include "replication/walreceiver.h"
+
 #include "system_stats.h"
 #include "postgres_stats.h"
 
@@ -987,7 +989,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 			ps.userid = beentry->st_userid;
 			ps.state = beentry->st_state;
 
-			/* it is proven experimetally that it is safe to run InitPostgres only when we
+			/* it is proven experimentally that it is safe to run InitPostgres only when we
 			 * got some other backends connected which already initialized system caches.
 			 * In such case there will be entries with valid databaseid and userid. */
 			if (ps.userid && ps.databaseid && IsInitProcessingMode())
@@ -1040,6 +1042,13 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	pg_stats->recovery_in_progress = RecoveryInProgress();
 
+	pg_stats->wal.is_wal_replay_paused = RecoveryIsPaused();
+	pg_stats->wal.last_xact_replay_timestamp = GetLatestXTime();
+        pg_stats->wal.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
+        pg_stats->wal.current_wal_lsn = GetXLogWriteRecPtr();
+        pg_stats->wal.last_wal_receive_lsn = GetXLogWriteRecPtr();
+        //recptr = GetWalRcvFlushRecPtr(NULL, NULL);
+      
 	if (init_postgres)
 	{
 #if PG_VERSION_NUM >= 110000

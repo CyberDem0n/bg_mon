@@ -93,6 +93,14 @@ typedef struct {
 } pg_stat;
 
 typedef struct {
+        bool is_wal_replay_paused;
+        TimestampTz last_xact_replay_timestamp; 
+        XLogRecPtr last_wal_replay_lsn;
+        XLogRecPtr current_wal_lsn;
+        XLogRecPtr last_wal_receive_lsn;
+} wal_metrics;
+
+typedef struct {
 	pg_stat *values;
 	size_t size;
 	size_t pos;
@@ -101,6 +109,7 @@ typedef struct {
 	int total_connections;
 	int active_connections;
 	int idle_in_transaction_connections;
+        wal_metrics wal;
 } pg_stat_list;
 
 void postgres_stats_init(void);
