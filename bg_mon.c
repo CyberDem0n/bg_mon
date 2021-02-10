@@ -140,7 +140,8 @@ static bool check_bucket_timerange(time_t tm)
 	struct timeval tv;
 
 	gettimeofday(&tv, NULL);
-	return (tv.tv_sec - tm) / 60 <= bg_mon_num_buckets;
+	tm = tv.tv_sec - tm;
+	return tm > 0 && tm / 60 <= bg_mon_num_buckets;
 }
 
 static time_t parse_bucket_request(const char *uri)

@@ -84,6 +84,7 @@ function curl_ps_loop() {
     curl -s http://localhost:$(($bport+$1))/$(date | sed 's/ /+/g') > /dev/null
     curl -s http://localhost:$(($bport+$1))/now > /dev/null
     curl -s http://localhost:$(($bport+$1))/blablabla > /dev/null
+    curl -s http://localhost:$(($bport+$1))/100000000000000000000000000000000000000000000 > /dev/null
 }
 
 function clone_cluster() {
