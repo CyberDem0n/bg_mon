@@ -6,6 +6,7 @@
 #include "miscadmin.h"
 
 #include "access/htup_details.h"
+#include "access/heapam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "executor/spi.h"
@@ -21,6 +22,10 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#if PG_VERSION_NUM < 90400
+#include "utils/tqual.h"
+#endif
+#include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
@@ -47,19 +52,19 @@ typedef struct {
 } proc_stat_list;
 
 static proc_stat_list proc_stats;
-static pg_stat_list pg_stats_current;
-static pg_stat_list pg_stats_new;
+static pg_stat pg_stats_current;
+static pg_stat pg_stats_new;
 
 typedef struct {
-	pg_stat		*p;		/* pointer to a corresponding pg_stat entry */
-	uint32		pid;
+	pg_stat_activity	*p;		/* pointer to a corresponding pg_stat_activity entry */
+	uint32				pid;
 #if PG_VERSION_NUM < 90600
-	uint32		field1; /* a 32-bit ID field */
-	uint32		field2; /* a 32-bit ID field */
-	uint32		field3; /* a 32-bit ID field */
-	uint16		field4; /* a 16-bit ID field */
-	uint8		type;	/* see enum LockTagType */
-	bool		granted;
+	uint32				field1; /* a 32-bit ID field */
+	uint32				field2; /* a 32-bit ID field */
+	uint32				field3; /* a 32-bit ID field */
+	uint16				field4; /* a 16-bit ID field */
+	uint8				type;	/* see enum LockTagType */
+	bool				granted;
 #endif
 } _lock;
 
@@ -191,14 +196,14 @@ static _lock *get_pg_locks(int *num_locks)
 	return locks;
 }
 
-static pg_stat *find_pg_proc_by_pid(pg_stat_list pg_stats, uint32 pid)
+static pg_stat_activity *find_pg_proc_by_pid(pg_stat_activity_list pg_stats, uint32 pid)
 {
-	pg_stat *low = pg_stats.values;
-	pg_stat *high = low + pg_stats.pos - 1;
+	pg_stat_activity *low = pg_stats.values;
+	pg_stat_activity *high = low + pg_stats.pos - 1;
 
 	while (low <= high)
 	{
-		pg_stat *middle = low + (high - low) / 2;
+		pg_stat_activity *middle = low + (high - low) / 2;
 
 		if (pid < middle->pid)
 			high = middle - 1;
@@ -211,7 +216,7 @@ static pg_stat *find_pg_proc_by_pid(pg_stat_list pg_stats, uint32 pid)
 	return NULL;
 }
 
-static void update_blockers(pg_stat *blocked, pg_stat *blocker)
+static void update_blockers(pg_stat_activity *blocked, pg_stat_activity *blocker)
 {
 	blocker->is_blocker = true;
 	if (blocked->blockers)
@@ -221,7 +226,7 @@ static void update_blockers(pg_stat *blocked, pg_stat *blocker)
 	blocked->num_blockers++;
 }
 
-static void fix_blockers_array(pg_stat *blocked)
+static void fix_blockers_array(pg_stat_activity *blocked)
 {
 	if (blocked->num_blockers < 2)
 	{
@@ -231,7 +236,7 @@ static void fix_blockers_array(pg_stat *blocked)
 	}
 }
 
-static void enrich_pg_stats(MemoryContext othercxt, pg_stat_list pg_stats, _lock *locks, int num_locks)
+static void enrich_pg_stats(MemoryContext othercxt, pg_stat_activity_list pg_stats, _lock *locks, int num_locks)
 {
 	int	i, j, k, num_blockers;
 
@@ -302,7 +307,7 @@ adjust_i:
 			{
 				bool e = false;
 				int m;
-				pg_stat *blocker;
+				pg_stat_activity *blocker;
 
 				if ((k = DatumGetInt32(blockers[j])) == 0) continue;
 
@@ -322,18 +327,18 @@ adjust_i:
 }
 
 
-static void pg_stat_list_init(pg_stat_list *list)
+static void pg_stat_activity_list_init(pg_stat_activity_list *list)
 {
 	list->pos = 0;
 	list->size = MaxBackends + 17;
-	list->values = palloc(sizeof(pg_stat) * list->size);
+	list->values = palloc(sizeof(pg_stat_activity) * list->size);
 }
 
-static void pg_stat_list_free_resources(pg_stat_list *list)
+static void pg_stat_activity_list_free_resources(pg_stat_activity_list *list)
 {
 	size_t i;
 	for (i = 0; i < list->pos; ++i) {
-		pg_stat ps = list->values[i];
+		pg_stat_activity ps = list->values[i];
 		FREE(ps.query);
 		FREE(ps.usename);
 		FREE(ps.datname);
@@ -346,7 +351,7 @@ static void pg_stat_list_free_resources(pg_stat_list *list)
 	list->pos = 0;
 }
 
-static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
+static void pg_stat_activity_list_add(pg_stat_activity_list *list, pg_stat_activity ps)
 {
 	if (list->values == NULL)
 		list->pos = list->size = 0;
@@ -354,10 +359,37 @@ static bool pg_stat_list_add(pg_stat_list *list, pg_stat ps)
 	if (list->pos >= list->size) {
 		int new_size = list->size > 0 ? list->size * 2 : 7;
 		list->size = new_size;
-		list->values = repalloc(list->values, sizeof(pg_stat)*new_size);
+		list->values = repalloc(list->values, sizeof(pg_stat_activity)*new_size);
 	}
 	list->values[list->pos++] = ps;
-	return true;
+}
+
+static void db_stat_list_init(db_stat_list *list)
+{
+	list->pos = 0;
+	list->size = 3;
+	list->values = palloc(sizeof(db_stat) * list->size);
+}
+
+static void db_stat_list_free_resources(db_stat_list *list)
+{
+	size_t i;
+	for (i = 0; i < list->pos; ++i)
+		FREE(list->values[i].datname);
+	list->pos = 0;
+}
+
+static void db_stat_list_add(db_stat_list *list, db_stat ds)
+{
+	if (list->values == NULL)
+		list->pos = list->size = 0;
+
+	if (list->pos >= list->size) {
+		int new_size = list->size > 0 ? list->size * 2 : 7;
+		list->size = new_size;
+		list->values = repalloc(list->values, sizeof(db_stat)*new_size);
+	}
+	list->values[list->pos++] = ds;
 }
 
 static size_t json_escaped_size(const char *s, size_t len)
@@ -619,9 +651,14 @@ static int proc_stat_cmp(const void *el1, const void *el2)
 	return ((const proc_stat *) el1)->pid - ((const proc_stat *) el2)->pid;
 }
 
-static int pg_stat_cmp(const void *el1, const void *el2)
+static int pg_stat_activity_cmp(const void *el1, const void *el2)
 {
-	return ((const pg_stat *) el1)->pid - ((const pg_stat *) el2)->pid;
+	return ((const pg_stat_activity *) el1)->pid - ((const pg_stat_activity *) el2)->pid;
+}
+
+static int db_stat_cmp(const void *el1, const void *el2)
+{
+	return ((const db_stat *) el1)->databaseid - ((const db_stat *) el2)->databaseid;
 }
 
 static void read_procfs(proc_stat_list *list)
@@ -672,7 +709,7 @@ static void read_procfs(proc_stat_list *list)
 		qsort(list->values, list->pos, sizeof(proc_stat), proc_stat_cmp);
 }
 
-static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
+static void merge_stats(pg_stat_activity_list *pg_stats, proc_stat_list proc_stats)
 {
 	size_t pg_stats_pos = 0, proc_stats_pos = 0;
 	size_t pg_stats_size = pg_stats->pos;
@@ -683,11 +720,11 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 			break;
 		} else if (pg_stats_pos >= pg_stats_size || // No more entries from pg_stats_activity (special process?)
 				pg_stats->values[pg_stats_pos].pid > proc_stats.values[proc_stats_pos].pid) {
-			pg_stat pgs = {0,};
+			pg_stat_activity pgs = {0,};
 			pgs.ps = proc_stats.values[proc_stats_pos];
 			pgs.pid = pgs.ps.pid;
 			pgs.type = PG_UNDEFINED; /* unknown process */
-			pg_stat_list_add(pg_stats, pgs);
+			pg_stat_activity_list_add(pg_stats, pgs);
 			++proc_stats_pos;
 		} else if (pg_stats->values[pg_stats_pos].pid == proc_stats.values[proc_stats_pos].pid) {
 			pg_stats->values[pg_stats_pos++].ps = proc_stats.values[proc_stats_pos++];
@@ -697,7 +734,7 @@ static void merge_stats(pg_stat_list *pg_stats, proc_stat_list proc_stats)
 	}
 
 	if (pg_stats->pos > 0)
-		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
+		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat_activity), pg_stat_activity_cmp);
 }
 
 #define PROCESS_PATTERN " process"
@@ -795,7 +832,7 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 	return type;
 }
 
-static void read_proc_cmdline(pg_stat *stat)
+static void read_proc_cmdline(pg_stat_activity *stat)
 {
 	FILE *f;
 	char buf[MAXPGPATH];
@@ -831,7 +868,7 @@ static void read_proc_cmdline(pg_stat *stat)
 	fclose(f);
 }
 
-static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, unsigned long long itv)
+static void calculate_stats_diff(pg_stat_activity *old_stat, pg_stat_activity *new_stat, unsigned long long itv)
 {
 	proc_stat *o = &old_stat->ps;
 	proc_stat *n = &new_stat->ps;
@@ -845,41 +882,84 @@ static void calculate_stats_diff(pg_stat *old_stat, pg_stat *new_stat, unsigned 
 	n->utime_diff = SP_VALUE_100(o->utime, n->utime, itv);
 	n->stime_diff = SP_VALUE_100(o->stime, n->stime, itv);
 	n->gtime_diff = SP_VALUE_100(o->gtime, n->gtime, itv);
+
 }
 
-static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
+static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_activity_list new_activity, unsigned long long itv)
+{
+	size_t old_pos = 0, new_pos = 0;
+
+	wal_metrics o = old_activity.wal_metrics;
+	wal_metrics n = new_activity.wal_metrics;
+
+	while (old_pos < old_activity.pos || new_pos < new_activity.pos) {
+		if (new_pos >= new_activity.pos)
+			old_activity.values[old_pos++].ps.free_cmdline = true;
+		else if (old_pos >= old_activity.pos)
+			read_proc_cmdline(new_activity.values + new_pos++);
+		else if (old_activity.values[old_pos].pid == new_activity.values[new_pos].pid) {
+			if (old_activity.values[old_pos].ps.start_time != new_activity.values[new_pos].ps.start_time)
+				old_activity.values[old_pos].ps.free_cmdline = true;
+			else if (old_activity.values[old_pos].type != PG_UNDEFINED && new_activity.values[new_pos].type == PG_UNDEFINED) {
+				new_activity.values[new_pos].type = old_activity.values[old_pos].type;
+				if (new_activity.values[new_pos].type == PG_LOGICAL_WORKER || new_activity.values[new_pos].type == PG_BG_WORKER)
+					new_activity.values[new_pos].ps.cmdline = old_activity.values[old_pos].ps.cmdline;
+			}
+
+			read_proc_cmdline(new_activity.values + new_pos);
+			calculate_stats_diff(old_activity.values + old_pos++, new_activity.values + new_pos++, itv);
+		} else if (old_activity.values[old_pos].pid > new_activity.values[new_pos].pid)
+			read_proc_cmdline(new_activity.values + new_pos++);
+		else // old.pid < new.pid
+			old_activity.values[old_pos++].ps.free_cmdline = true;
+	}
+
+
+	n.current_diff = S_VALUE(o.current_wal_lsn, n.current_wal_lsn, itv) / 1024;
+	n.receive_diff = S_VALUE(o.last_wal_receive_lsn, o.last_wal_receive_lsn, itv) / 1024;
+	n.replay_diff = S_VALUE(o.last_wal_replay_lsn, o.last_wal_replay_lsn, itv) / 1024;
+}
+
+static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned long long itv)
+{
+	size_t old_pos = 0, new_pos = 0;
+
+	while (old_pos < old_db.pos && new_pos < new_db.pos) {
+		if (old_db.values[old_pos].databaseid == new_db.values[new_pos].databaseid) {
+			new_db.values[new_pos].n_xact_commit_diff = S_VALUE(old_db.values[old_pos].n_xact_commit, new_db.values[new_pos].n_xact_commit, itv);
+			new_db.values[new_pos].n_xact_rollback_diff = S_VALUE(old_db.values[old_pos].n_xact_rollback, new_db.values[new_pos].n_xact_rollback, itv);
+			new_db.values[new_pos].n_blocks_fetched_diff = S_VALUE(old_db.values[old_pos].n_blocks_fetched, new_db.values[new_pos].n_blocks_fetched, itv);
+			new_db.values[new_pos].n_blocks_hit_diff = S_VALUE(old_db.values[old_pos].n_blocks_hit, new_db.values[new_pos].n_blocks_hit, itv);
+			new_db.values[new_pos].n_tuples_returned_diff = S_VALUE(old_db.values[old_pos].n_tuples_returned, new_db.values[new_pos].n_tuples_returned, itv);
+			new_db.values[new_pos].n_tuples_fetched_diff = S_VALUE(old_db.values[old_pos].n_tuples_fetched, new_db.values[new_pos].n_tuples_fetched, itv);
+			new_db.values[new_pos].n_tuples_updated_diff = S_VALUE(old_db.values[old_pos].n_tuples_updated, new_db.values[new_pos].n_tuples_updated, itv);
+			new_db.values[new_pos].n_tuples_inserted_diff = S_VALUE(old_db.values[old_pos].n_tuples_inserted, new_db.values[new_pos].n_tuples_inserted, itv);
+			new_db.values[new_pos].n_tuples_deleted_diff = S_VALUE(old_db.values[old_pos].n_tuples_deleted, new_db.values[new_pos].n_tuples_deleted, itv);
+			new_db.values[new_pos].n_temp_files_diff = S_VALUE(old_db.values[old_pos].n_temp_files, new_db.values[new_pos].n_temp_files, itv);
+			new_db.values[new_pos].n_temp_bytes_diff = S_VALUE(old_db.values[old_pos].n_temp_bytes, new_db.values[new_pos].n_temp_bytes, itv);
+			if (new_db.track_io_timing) {
+				new_db.values[new_pos].n_block_read_time_diff = MINIMUM(S_VALUE(old_db.values[old_pos].n_block_read_time, new_db.values[new_pos].n_block_read_time, itv)/10000.0, 100.0);
+				new_db.values[new_pos].n_block_write_time_diff = MINIMUM(S_VALUE(old_db.values[old_pos].n_block_write_time, new_db.values[new_pos].n_block_write_time, itv)/10000.0, 100.0);
+			}
+			old_pos++;
+			new_pos++;
+		} else if (old_db.values[old_pos].databaseid > new_db.values[new_pos].databaseid)
+			new_pos++;
+		else /* old_db.values[old_pos].databaseid < new_db.values[new_pos].databaseid */
+			old_pos++;
+	}
+
+}
+
+static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 {
 	unsigned long long itv;
-	size_t old_pos = 0, new_pos = 0;
 
 	if (old_stats.uptime == 0) return;
 	itv = new_stats.uptime - old_stats.uptime;
 
-	while (old_pos < old_stats.pos || new_pos < new_stats.pos) {
-		if (new_pos >= new_stats.pos)
-			old_stats.values[old_pos++].ps.free_cmdline = true;
-		else if (old_pos >= old_stats.pos)
-			read_proc_cmdline(new_stats.values + new_pos++);
-		else if (old_stats.values[old_pos].pid == new_stats.values[new_pos].pid) {
-			if (old_stats.values[old_pos].ps.start_time != new_stats.values[new_pos].ps.start_time)
-				old_stats.values[old_pos].ps.free_cmdline = true;
-			else if (old_stats.values[old_pos].type != PG_UNDEFINED && new_stats.values[new_pos].type == PG_UNDEFINED) {
-				new_stats.values[new_pos].type = old_stats.values[old_pos].type;
-				if (new_stats.values[new_pos].type == PG_LOGICAL_WORKER || new_stats.values[new_pos].type == PG_BG_WORKER)
-					new_stats.values[new_pos].ps.cmdline = old_stats.values[old_pos].ps.cmdline;
-			}
-
-			read_proc_cmdline(new_stats.values + new_pos);
-			calculate_stats_diff(old_stats.values + old_pos++, new_stats.values + new_pos++, itv);
-		} else if (old_stats.values[old_pos].pid > new_stats.values[new_pos].pid)
-			read_proc_cmdline(new_stats.values + new_pos++);
-		else // old.pid < new.pid
-			old_stats.values[old_pos++].ps.free_cmdline = true;
-	}
-
-	new_stats.wal_metrics.current_diff = S_VALUE(old_stats.wal_metrics.current_wal_lsn, new_stats.wal_metrics.current_wal_lsn, itv) / 1024;
-	new_stats.wal_metrics.receive_diff = S_VALUE(old_stats.wal_metrics.last_wal_receive_lsn, new_stats.wal_metrics.last_wal_receive_lsn, itv) / 1024;
-	new_stats.wal_metrics.replay_diff = S_VALUE(old_stats.wal_metrics.last_wal_replay_lsn, new_stats.wal_metrics.last_wal_replay_lsn, itv) / 1024;
+	diff_pg_stat_activity(old_stats.activity, new_stats.activity, itv);
+	diff_db_stats(old_stats.db, new_stats.db, itv);
 }
 
 static double calculate_age(TimestampTz ts)
@@ -930,7 +1010,7 @@ static PgBackendType map_backend_type(BackendType type)
 }
 #endif
 
-static void get_pg_stat_activity(pg_stat_list *pg_stats)
+static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 {
 	bool		 init_postgres = false;
 	int			 i, num_backends, num_locks;
@@ -958,7 +1038,7 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
 		if (beentry && beentry->st_procpid != MyProcPid)
 		{
-			pg_stat ps = {beentry->st_procpid, 0,};
+			pg_stat_activity ps = {beentry->st_procpid, 0,};
 #if PG_VERSION_NUM >= 90600
 			PGPROC *proc = BackendPidGetProc(beentry->st_procpid);
 #if PG_VERSION_NUM >= 100000
@@ -1030,21 +1110,19 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 				ps.age = calculate_age(beentry->st_activity_start_timestamp);
 			else ps.age = -1;
 
-			pg_stat_list_add(pg_stats, ps);
+			pg_stat_activity_list_add(pg_stats, ps);
 		}
 	}
 
 	pgstat_clear_snapshot();
 
-	if ((num_backends = pg_stats->pos) > 1)
-		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat), pg_stat_cmp);
+	if (pg_stats->pos > 1)
+		qsort(pg_stats->values, pg_stats->pos, sizeof(pg_stat_activity), pg_stat_activity_cmp);
 
 	if (num_locks > 0)
 		enrich_pg_stats(othercxt, *pg_stats, locks, num_locks);
 
 	MemoryContextDelete(othercxt);
-
-	pg_stats->recovery_in_progress = RecoveryInProgress();
 
 	pg_stats->wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
 	pg_stats->wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
@@ -1068,62 +1146,151 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 		SetProcessingMode(NormalProcessing);
 		MemoryContextSwitchTo(oldcxt);
 	}
+}
 
-	othercxt = CurrentMemoryContext;
+static void resolve_database_and_user_ids(pg_stat_activity_list activity, MemoryContext resultcxt)
+{
+	MemoryContext oldcxt;
+	int i;
 
-	if (IsNormalProcessingMode())
+	for (i = 0; i < activity.pos; ++i)
 	{
-		StartTransactionCommand();
-		(void) GetTransactionSnapshot();
-
-		for (i = 0; i < num_backends; ++i)
-		{
-			pg_stat *ps = pg_stats->values + i;
-			if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
-				if (ps->userid)
+		pg_stat_activity *ps = activity.values + i;
+		if (ps->is_blocker || ps->state != STATE_IDLE || ps->type != PG_BACKEND) {
+			if (ps->userid)
+			{
+				HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
+				if (HeapTupleIsValid(roleTup))
 				{
-					HeapTuple roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(ps->userid));
-					if (HeapTupleIsValid(roleTup))
-					{
-						oldcxt = MemoryContextSwitchTo(othercxt);
-						ps->usename = json_escape_string(((Form_pg_authid) GETSTRUCT(roleTup))->rolname.data);
-						MemoryContextSwitchTo(oldcxt);
-						ReleaseSysCache(roleTup);
-					}
+					oldcxt = MemoryContextSwitchTo(resultcxt);
+					ps->usename = json_escape_string(NameStr(((Form_pg_authid) GETSTRUCT(roleTup))->rolname));
+					MemoryContextSwitchTo(oldcxt);
+					ReleaseSysCache(roleTup);
 				}
+			}
 
-				if (ps->databaseid)
+			if (ps->databaseid)
+			{
+				HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
+				if (HeapTupleIsValid(databaseTup))
 				{
-					HeapTuple databaseTup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(ps->databaseid));
-					if (HeapTupleIsValid(databaseTup))
-					{
-						oldcxt = MemoryContextSwitchTo(othercxt);
-						ps->datname = json_escape_string(((Form_pg_database) GETSTRUCT(databaseTup))->datname.data);
-						MemoryContextSwitchTo(oldcxt);
-						ReleaseSysCache(databaseTup);
-					}
+					oldcxt = MemoryContextSwitchTo(resultcxt);
+					ps->datname = json_escape_string(NameStr(((Form_pg_database) GETSTRUCT(databaseTup))->datname));
+					MemoryContextSwitchTo(oldcxt);
+					ReleaseSysCache(databaseTup);
 				}
 			}
 		}
-
-		CommitTransactionCommand();
-		MemoryContextSwitchTo(othercxt);
 	}
 }
 
-pg_stat_list get_postgres_stats(void)
+static void get_database_stats(db_stat_list *db, MemoryContext resultcxt)
 {
-	pg_stat_list pg_stats_tmp;
+#if PG_VERSION_NUM < 120000
+	Relation rel = heap_open(DatabaseRelationId, AccessShareLock);
+#else
+	Relation rel = table_open(DatabaseRelationId, AccessShareLock);
+#endif
+#if PG_VERSION_NUM < 90400
+	HeapScanDesc scan = heap_beginscan(rel, SnapshotNow, 0, NULL);
+#elif PG_VERSION_NUM < 120000
+	HeapScanDesc scan = heap_beginscan_catalog(rel, 0, NULL);
+#else
+	TableScanDesc scan = table_beginscan_catalog(rel, 0, NULL);
+#endif
+	HeapTuple tup;
+
+	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
+	{
+		Form_pg_database pgdatabase = (Form_pg_database) GETSTRUCT(tup);
+#if PG_VERSION_NUM < 120000
+		Oid oid = HeapTupleGetOid(tup);
+#else
+		Oid oid = pgdatabase->oid;
+#endif
+		PgStat_StatDBEntry *dbentry = pgstat_fetch_stat_dbentry(oid);
+
+		if (dbentry != NULL)
+		{
+			MemoryContext oldcxt = MemoryContextSwitchTo(resultcxt);
+
+			db_stat ds = {0,};
+			ds.databaseid = oid;
+			ds.datname = json_escape_string(NameStr(pgdatabase->datname));
+
+			ds.n_xact_commit = (int64) (dbentry->n_xact_commit);
+			ds.n_xact_rollback = (int64) (dbentry->n_xact_rollback);
+			ds.n_blocks_fetched = (int64) (dbentry->n_blocks_fetched);
+			ds.n_blocks_hit = (int64) (dbentry->n_blocks_hit);
+			ds.n_tuples_returned = (int64) (dbentry->n_tuples_returned);
+			ds.n_tuples_fetched = (int64) (dbentry->n_tuples_fetched);
+			ds.n_tuples_inserted = (int64) (dbentry->n_tuples_inserted);
+			ds.n_tuples_updated = (int64) (dbentry->n_tuples_updated);
+			ds.n_tuples_deleted = (int64) (dbentry->n_tuples_deleted);
+			ds.n_conflict_tablespace = (int64) (dbentry->n_conflict_tablespace);
+			ds.n_conflict_lock = (int64) (dbentry->n_conflict_lock);
+			ds.n_conflict_snapshot = (int64) (dbentry->n_conflict_snapshot);
+			ds.n_conflict_bufferpin = (int64) (dbentry->n_conflict_bufferpin);
+			ds.n_conflict_startup_deadlock = (int64) (dbentry->n_conflict_startup_deadlock);
+			ds.n_temp_files = (int64) (dbentry->n_temp_files);
+			ds.n_temp_bytes = (int64) (dbentry->n_temp_bytes);
+			ds.n_deadlocks = (int64) (dbentry->n_deadlocks);
+#if PG_VERSION_NUM >= 120000
+			ds.n_checksum_failures = (int64) (dbentry->n_checksum_failures);
+			ds.last_checksum_failure = (int64) (dbentry->last_checksum_failure);
+#endif
+			ds.n_block_read_time = (int64) (dbentry->n_block_read_time); /* times in microseconds */
+			ds.n_block_write_time = (int64) (dbentry->n_block_write_time);
+
+			db_stat_list_add(db, ds);
+
+			MemoryContextSwitchTo(oldcxt);
+		}
+	}
+
+#if PG_VERSION_NUM < 120000
+	heap_endscan(scan);
+	heap_close(rel, AccessShareLock);
+#else
+	table_endscan(scan);
+	table_close(rel, AccessShareLock);
+#endif
+}
+
+pg_stat get_postgres_stats(void)
+{
+	pg_stat pg_stats_tmp;
 
 	read_procfs(&proc_stats);
 
-	pg_stat_list_free_resources(&pg_stats_new);
+	pg_stat_activity_list_free_resources(&pg_stats_new.activity);
+	db_stat_list_free_resources(&pg_stats_new.db);
 
-	get_pg_stat_activity(&pg_stats_new);
+	get_pg_stat_activity(&pg_stats_new.activity);
+
+	if (IsNormalProcessingMode()) {
+		MemoryContext resultcxt = CurrentMemoryContext;
+
+		StartTransactionCommand();
+		(void) GetTransactionSnapshot();
+
+		resolve_database_and_user_ids(pg_stats_new.activity, resultcxt);
+		get_database_stats(&pg_stats_new.db, resultcxt);
+		pg_stats_new.db.track_io_timing = track_io_timing;
+
+		CommitTransactionCommand();
+		MemoryContextSwitchTo(resultcxt);
+	}
 
 	pg_stats_new.uptime = system_stats_old.uptime;
 
-	merge_stats(&pg_stats_new, proc_stats);
+	pg_stats_new.recovery_in_progress = RecoveryInProgress();
+
+	merge_stats(&pg_stats_new.activity, proc_stats);
+
+	if (pg_stats_new.db.pos > 1)
+		qsort(pg_stats_new.db.values, pg_stats_new.db.pos, sizeof(db_stat), db_stat_cmp);
+
 	diff_pg_stats(pg_stats_current, pg_stats_new);
 
 	pg_stats_tmp = pg_stats_current;
@@ -1136,10 +1303,12 @@ pg_stat_list get_postgres_stats(void)
 void postgres_stats_init(void)
 {
 	mem_page_size = getpagesize() / 1024;
-	pg_stat_list_init(&pg_stats_current);
-	pg_stat_list_init(&pg_stats_new);
+	pg_stat_activity_list_init(&pg_stats_current.activity);
+	pg_stat_activity_list_init(&pg_stats_new.activity);
+	db_stat_list_init(&pg_stats_current.db);
+	db_stat_list_init(&pg_stats_new.db);
 
-	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.size));
+	proc_stats.values = palloc(sizeof(proc_stat) * (proc_stats.size = pg_stats_current.activity.size));
 
 	cmdline_prefix_len = 10;
 
