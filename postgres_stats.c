@@ -1129,8 +1129,8 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 
 	pg_stats->wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
 	pg_stats->wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
-	#if PG_VERSION_NUM >= 130100 
-		pg_stats->wal.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
+	#if PG_VERSION_NUM >= 130000 
+		pg_stats->wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
 	#else
 		pg_stats->wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
 	#endif
