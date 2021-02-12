@@ -877,8 +877,9 @@ static void diff_pg_stats(pg_stat_list old_stats, pg_stat_list new_stats)
 			old_stats.values[old_pos++].ps.free_cmdline = true;
 	}
 
-	new_stats.wal.wal_progression_kb_s = S_VALUE(old_stats.wal.current_wal_lsn, new_stats.wal.current_wal_lsn, itv) / 1024;
-
+	new_stats.wal_metrics.current_diff = S_VALUE(old_stats.wal_metrics.current_wal_lsn, new_stats.wal_metrics.current_wal_lsn, itv) / 1024;
+	new_stats.wal_metrics.receive_diff = S_VALUE(old_stats.wal_metrics.last_wal_receive_lsn, new_stats.wal_metrics.last_wal_receive_lsn, itv) / 1024;
+	new_stats.wal_metrics.replay_diff = S_VALUE(old_stats.wal_metrics.last_wal_replay_lsn, new_stats.wal_metrics.last_wal_replay_lsn, itv) / 1024;
 }
 
 static double calculate_age(TimestampTz ts)
@@ -1045,15 +1046,15 @@ static void get_pg_stat_activity(pg_stat_list *pg_stats)
 
 	pg_stats->recovery_in_progress = RecoveryInProgress();
 
-	pg_stats->wal.is_wal_replay_paused = RecoveryIsPaused();
-	pg_stats->wal.last_xact_replay_timestamp = GetLatestXTime();
+	pg_stats->wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
+	pg_stats->wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
 
-	pg_stats->wal.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
-	pg_stats->wal.current_wal_lsn = GetXLogWriteRecPtr();
+	pg_stats->wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
+	pg_stats->wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
 	#if PG_VERSION_NUM >= 130100 
 		pg_stats->wal.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
 	#else
-		pg_stats->wal.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
+		pg_stats->wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
 	#endif
 	if (init_postgres)
 	{
