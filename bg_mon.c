@@ -289,6 +289,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	pressure *p_io = s.p_io;
 
 	bool is_first = true;
+	char buffer[20];
 	size_t i;
 
 	evbuffer_add_printf(evb, "{\"hostname\":\"%s\",\"time\":%llu,\"sysname\":\"Linux: %s\",", s.hostname, ts, s.sysname);
@@ -299,7 +300,10 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 
 	evbuffer_add_printf(evb, "\"last_wal_replay_lsn\":%ld,", p.wal.last_wal_replay_lsn);
 	evbuffer_add_printf(evb, "\"current_wal_lsn\":%ld,", p.wal.current_wal_lsn);
-	evbuffer_add_printf(evb, "\"last_wal_receive_lsn\":%ld,", p.wal.last_wal_receive_lsn);
+	evbuffer_add_printf(evb, "\"wal_progression_kb_s\":%u,", p.wal.wal_progression_kb_s);
+
+	sprintf(buffer, "%ld", p.wal.last_wal_receive_lsn);
+	evbuffer_add_printf(evb, "\"last_wal_receive_lsn\":%s,", p.wal.last_wal_receive_lsn ? buffer : "null");
 	evbuffer_add_printf(evb, "\"last_xact_replay_timestamp\":%ld},", p.wal.last_xact_replay_timestamp);
 	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", p.total_connections, p.idle_in_transaction_connections);
