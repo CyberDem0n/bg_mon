@@ -38,6 +38,6 @@ If you did everything right, go to you browser and type following URLs to see re
 
 `http://<bg_mon.listen_address>:<bg_mon.port>/` -- expose collected statistics in a JSON format.
 
-`http://<bg_mon.listen_address>:<bg_mon.port>/X` -- get aggregated statistics from the bucket X, where X is between **0** and **history\_buckets**. The array with the current bucket might be not yet closed.
+`http://<bg_mon.listen_address>:<bg_mon.port>/X` -- get aggregated statistics from the bucket X, where X is between **0** and **history\_buckets**, **unixtime**, **time**, or **timestamp** in any format supported by postgres (if the timezone is not specified it is assumed to be UTC). The array with the current bucket might be not yet closed.
 
 `http://<bg_mon.listen_address>:<bg_mon.port>/ui` -- simple web page which fetches statistics from server every second and renders it in a simple html format.

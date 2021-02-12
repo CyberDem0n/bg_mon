@@ -18,6 +18,7 @@
 /* these headers are used by this particular worker's code */
 #include "pgstat.h"
 #include "tcop/utility.h"
+#include "utils/datetime.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
@@ -79,9 +80,73 @@ static bool accepts_brotli(struct evhttp_request *req)
 	return false;
 }
 
-static int parse_bucket_request(const char *uri)
+static time_t parse_timestamp(const char *uri)
 {
-	int ret = 0;
+	time_t ret = -1;
+	const char *str = uri + 1;
+
+	if (strcmp(str, "now") == 0 || strcmp(str, "today") == 0 ||
+		strcmp(str, "tomorrow") == 0 || strcmp(str, "yesterday") == 0)
+		return ret;
+
+	{
+		fsec_t fsec;
+		struct pg_tm tm = {0,};
+		int tz, dtype, nf;
+		char *field[MAXDATEFIELDS];
+		int ftype[MAXDATEFIELDS];
+		char workbuf[MAXDATELEN + MAXDATEFIELDS];
+		TimestampTz timestamp, current_timestamp;
+
+		size_t size_out;
+		char *decoded = evhttp_uridecode(uri, 1, &size_out);
+
+		if (decoded == NULL)
+			return ret;
+
+		if (ParseDateTime(decoded + 1, workbuf, sizeof(workbuf), field, ftype, MAXDATEFIELDS, &nf) != 0)
+			goto err;
+
+		current_timestamp = GetCurrentTimestamp();
+		if (timestamp2tm(current_timestamp, NULL, &tm, &fsec, NULL, NULL) != 0)
+			goto err;
+
+		if (DecodeDateTime(field, ftype, nf, &dtype, &tm, &fsec, &tz) < 0)
+			goto err;
+
+		if (dtype != DTK_DATE && dtype != DTK_TIME)
+			goto err;
+
+		if (tm2timestamp(&tm, fsec, &tz, &timestamp) != 0)
+			goto err;
+
+		/* when request has only a time in the future off by 1 hour and more consider it as a prev day */
+		if (nf == 1 && ftype[0] == DTK_TIME && (timestamp - current_timestamp) / USECS_PER_HOUR > 0) {
+			j2date(date2j(tm.tm_year, tm.tm_mon, tm.tm_mday) - 1, &tm.tm_year, &tm.tm_mon, &tm.tm_mday);
+
+			if (tm2timestamp(&tm, fsec, &tz, &timestamp) != 0)
+				goto err;
+		}
+
+		ret = timestamptz_to_time_t(timestamp);
+err:
+		free(decoded);
+		return ret;
+	}
+}
+
+static bool check_bucket_timerange(time_t tm)
+{
+	struct timeval tv;
+
+	gettimeofday(&tv, NULL);
+	tm = tv.tv_sec - tm;
+	return tm > 0 && tm / 60 <= bg_mon_num_buckets;
+}
+
+static time_t parse_bucket_request(const char *uri)
+{
+	time_t ret = 0;
 	const char *p = uri + 1;
 
 	if (*uri != '/')
@@ -89,9 +154,12 @@ static int parse_bucket_request(const char *uri)
 
 	do {
 		if (*p < '0' || *p > '9')
-			return -1;
+			return parse_timestamp(uri);
 		ret = 10 * ret + (*p - '0');
 	} while (*(++p));
+
+	if (ret >= bg_mon_num_buckets && !check_bucket_timerange(ret))
+		return -1;
 
 	return ret;
 }
@@ -102,18 +170,28 @@ static time_t round_minute(time_t time)
 	return time - tm->tm_sec;
 }
 
-static bool send_aggregated_data(struct evhttp_request *req, struct aggregated_stats *agg)
+static bool check_bucket_time(struct aggregated_stats *agg, time_t tm)
+{
+	if (tm)
+		return round_minute(tm) == agg->minute;
+
+	return check_bucket_timerange(agg->minute);
+}
+
+static bool send_aggregated_data(struct evhttp_request *req, struct aggregated_stats *agg, time_t tm)
 {
 	bool ret = false;
 	struct evbuffer *evb;
 
 	pthread_mutex_lock(&agg_lock);
 	if ((ret = agg != NULL)) {
-		if (!agg->state.is_flushed && !agg->state.is_finished)
-			brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
+		if (check_bucket_time(agg, tm)) {
+			if (!agg->state.is_flushed && !agg->state.is_finished)
+				brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
 
-		evb = evbuffer_new();
-		evbuffer_add(evb, agg->state.to, agg->state.pos);
+			evb = evbuffer_new();
+			evbuffer_add(evb, agg->state.to, agg->state.pos);
+		} else ret = false;
 	}
 	pthread_mutex_unlock(&agg_lock);
 
@@ -125,22 +203,6 @@ static bool send_aggregated_data(struct evhttp_request *req, struct aggregated_s
 		evbuffer_free(evb);
 	}
 	return ret;
-}
-
-static bool send_aggregated_bucket(struct evhttp_request *req, struct aggregated_stats *agg)
-{
-	if (agg == NULL || (time(NULL) - agg->minute)/60 > bg_mon_num_buckets)
-		return false;
-
-	return send_aggregated_data(req, agg);
-}
-
-static bool send_aggregated_bucket_num(struct evhttp_request *req, int bucket)
-{
-	if (bucket < 0 || bucket >= bg_mon_num_buckets)
-		return false;
-
-	return send_aggregated_bucket(req, aggregated + bucket);
 }
 #endif
 
@@ -286,6 +348,9 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	cpu_stat c = s.cpu;
 	meminfo m = s.mem;
 	load_avg la = s.load_avg;
+	pressure *p_cpu = s.p_cpu;
+	pressure *p_memory = s.p_memory;
+	pressure *p_io = s.p_io;
 
 	bool is_first = true;
 	size_t i;
@@ -300,8 +365,20 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g],\"cpu\":{\"user\":", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "%2.1f,\"nice\": %2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
 	evbuffer_add_printf(evb, "\"idle\":%2.1f,\"iowait\":%2.1f,\"steal\":%2.1f", c.idle_diff, c.iowait_diff, c.steal_diff);
-	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\":", s.ctxt_diff, s.procs_running);
-	evbuffer_add_printf(evb, "%lu},\"memory\":{\"total\":%lu,\"free\":%lu,", s.procs_blocked, m.total, m.free);
+	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\": %lu}", s.ctxt_diff, s.procs_running, s.procs_blocked);
+
+	if (s.pressure) {
+		evbuffer_add_printf(evb, ",\"pressure\":{\"cpu\":[%4.6g, %4.6g, %4.6g, %4.6g],",
+							p_cpu[0].avg10, p_cpu[0].avg60, p_cpu[0].avg300, p_cpu[0].total);
+		evbuffer_add_printf(evb, "\"memory\":{\"some\":[%4.6g, %4.6g, %4.6g, %4.6g],\"full\":[%4.6g, %4.6g, %4.6g, %4.6g]},",
+							p_memory[0].avg10, p_memory[0].avg60, p_memory[0].avg300, p_memory[0].total,
+							p_memory[1].avg10, p_memory[1].avg60, p_memory[1].avg300, p_memory[1].total);
+		evbuffer_add_printf(evb, "\"io\":{\"some\":[%4.6g, %4.6g, %4.6g, %4.6g],\"full\":[%4.6g, %4.6g, %4.6g, %4.6g]}}",
+							p_io[0].avg10, p_io[0].avg60, p_io[0].avg300, p_io[0].total,
+							p_io[1].avg10, p_io[1].avg60, p_io[1].avg300, p_io[1].total);
+	}
+
+	evbuffer_add_printf(evb, ",\"memory\":{\"total\":%lu,\"free\":%lu,", m.total, m.free);
 	evbuffer_add_printf(evb, "\"buffers\":%lu,\"cached\":%lu,\"dirty\":%lu", m.buffers, m.cached, m.dirty);
 
 	if (m.overcommit.memory == 2) {
@@ -462,11 +539,17 @@ static void send_document_cb(struct evhttp_request *req, void *arg)
 	const char *uri = evhttp_request_get_uri(req);
 	struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
 #ifdef HAS_LIBBROTLI
-	int bucket;
-	if (bg_mon_num_buckets > 0 && (bucket = parse_bucket_request(uri)) > -1)
-		err = !send_aggregated_bucket_num(req, bucket);
-	else if (strcmp(uri, "/prev") == 0)
-		err = !send_aggregated_bucket(req, prev);
+	time_t tm = parse_bucket_request(uri);
+	if (tm > -1) {
+		int bucket;
+		if (tm < bg_mon_num_buckets) {
+			bucket = tm;
+			tm = 0;
+		} else
+			bucket = (tm / 60) % bg_mon_num_buckets;
+		err = !send_aggregated_data(req, aggregated + bucket, tm);
+	} else if (strcmp(uri, "/prev") == 0)
+		err = !send_aggregated_data(req, prev, 0);
 	else
 #endif
 	if (strncmp(uri, "/ui", 3)) {

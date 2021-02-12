@@ -38,6 +38,16 @@ function start_postgres() {
     while ! pg_isready -h localhost -p $(($port+$1)) -d postgres; do
         [[ $((max_attempts++)) -lt 10 ]] && sleep 1 || exit 1
     done
+
+    if [ -x ./noisia ]; then
+        if [ "$1" = "1" ]; then
+            OPTS=""
+        else
+            OPTS="--deadlocks --wait-xacts --temp-files --rollbacks"
+            psql -h localhost -c 'CREATE USER noisia' -p $(($port+$1)) postgres
+        fi
+        ./noisia --jobs=5 --duration=30 --idle-xacts $OPTS --conninfo="host=localhost port=$(($port+$1)) user=noisia dbname=postgres application_name=noisia" > noisia.$1.log 2>&1 &
+    fi
 }
 
 function create_cluster() {
@@ -47,6 +57,9 @@ host replication all ::1/128 trust" >> test_cluster$1/pg_hba.conf
     echo "unix_socket_directories = '.'
 hot_standby = 'on'
 logging_collector = 'on'
+log_directory = 'pg_log'
+log_line_prefix = '%u %m [%p] '
+log_filename = 'postgresql.log'
 archive_mode = 'on'
 archive_command = 'true'
 max_wal_senders = 10
@@ -76,6 +89,15 @@ function curl_ps_loop() {
     for a in $(seq -f '%02g' 0 19); do
         curl -s http://localhost:$(($bport+$1))/$a > /dev/null
     done
+    curl -s http://localhost:$(($bport+$1))/prev > /dev/null
+    curl -s http://localhost:$(($bport+$1))/$(date +'%H:%M' -ud '2 hour') > /dev/null
+    curl -s http://localhost:$(($bport+$1))/$(date +'%H:%M' -ud '1 minute ago') > /dev/null
+    curl -s http://localhost:$(($bport+$1))/$(date +'%s' -ud '1 minute ago') > /dev/null
+    curl -s http://localhost:$(($bport+$1))/$(date +'%s' -ud '1 hour ago') > /dev/null
+    curl -s http://localhost:$(($bport+$1))/$(date | sed 's/ /+/g') > /dev/null
+    curl -s http://localhost:$(($bport+$1))/now > /dev/null
+    curl -s http://localhost:$(($bport+$1))/blablabla > /dev/null
+    curl -s http://localhost:$(($bport+$1))/100000000000000000000000000000000000000000000 > /dev/null
 }
 
 function clone_cluster() {

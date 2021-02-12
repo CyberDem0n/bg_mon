@@ -8,7 +8,7 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
     env:
       PG: ${{ matrix.postgres-version }}
     strategy:
@@ -35,6 +35,11 @@ jobs:
         sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
         sudo apt-get install -yq --no-install-suggests --no-install-recommends postgresql-$PG postgresql-server-dev-$PG
 
+    - name: Download noisia
+      run: |
+        VERSION=0.1.0
+        curl -sL https://github.com/lesovsky/noisia/releases/download/v$VERSION/noisia_${VERSION}_linux_amd64.tar.gz | tar xzv noisia
+
     - name: Compile and install bg_mon
       run: |
         set -e
@@ -44,7 +49,7 @@ jobs:
     - name: Run tests
       run: |
         PATH=/usr/lib/postgresql/$PG/bin:$PATH bash -x test.sh
-        if grep -E '(ERROR|FATAL)' test_cluster?/*log/postgresql*.log | grep -Ev '(no COPY in progress|could not connect to|could not send|database system is shutting|error reading result of streaming command|database system is starting up)'; then exit 1; fi
+        if grep -E '(ERROR|FATAL)' test_cluster?/pg_log/postgresql.log | grep -Ev '(no COPY in progress|could not connect to|could not send|database system is shutting|error reading result of streaming command|database system is starting up|log:noisia)'; then exit 1; fi
 
     - name: Generate lcov.info
       run: |
