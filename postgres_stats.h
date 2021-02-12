@@ -120,36 +120,31 @@ typedef struct {
 	int64 n_tuples_updated_diff;
 	int64 n_tuples_inserted;
 	int64 n_tuples_inserted_diff;
-	int64 n_conflict_tablespace;
-	int64 n_conflict_tablespace_diff;
 	int64 n_tuples_deleted;
 	int64 n_tuples_deleted_diff;
+	int64 n_conflict_tablespace;
 	int64 n_conflict_lock;
-	int64 n_conflict_lock_diff;
 	int64 n_conflict_snapshot;
-	int64 n_conflict_snapshot_diff;
 	int64 n_conflict_bufferpin;
-	int64 n_conflict_bufferpin_diff;
 	int64 n_conflict_startup_deadlock;
-	int64 n_conflict_startup_deadlock_diff;
 	int64 n_temp_files;
 	int64 n_temp_files_diff;
 	int64 n_temp_bytes;
 	int64 n_temp_bytes_diff;
 	int64 n_deadlocks;
-	int64 n_deadlocks_diff;
 	int64 n_checksum_failures;
 	TimestampTz last_checksum_failure;
 	int64 n_block_read_time;       /* times in microseconds */
-	int64 n_block_read_time_diff;
+	double n_block_read_time_diff;
 	int64 n_block_write_time;
-	int64 n_block_write_time_diff;
+	double n_block_write_time_diff;
 } db_stat;
 
 typedef struct {
 	db_stat *values;
 	size_t size;
 	size_t pos;
+	bool track_io_timing;
 } db_stat_list;
 
 typedef struct {

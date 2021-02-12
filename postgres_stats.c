@@ -24,6 +24,7 @@
 #if PG_VERSION_NUM < 90400
 #include "utils/tqual.h"
 #endif
+#include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
@@ -922,17 +923,13 @@ static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned lon
 			new_db.values[new_pos].n_tuples_fetched_diff = S_VALUE(old_db.values[old_pos].n_tuples_fetched, new_db.values[new_pos].n_tuples_fetched, itv);
 			new_db.values[new_pos].n_tuples_updated_diff = S_VALUE(old_db.values[old_pos].n_tuples_updated, new_db.values[new_pos].n_tuples_updated, itv);
 			new_db.values[new_pos].n_tuples_inserted_diff = S_VALUE(old_db.values[old_pos].n_tuples_inserted, new_db.values[new_pos].n_tuples_inserted, itv);
-			new_db.values[new_pos].n_conflict_tablespace_diff = S_VALUE(old_db.values[old_pos].n_conflict_tablespace, new_db.values[new_pos].n_conflict_tablespace, itv);
 			new_db.values[new_pos].n_tuples_deleted_diff = S_VALUE(old_db.values[old_pos].n_tuples_deleted, new_db.values[new_pos].n_tuples_deleted, itv);
-			new_db.values[new_pos].n_conflict_lock_diff = S_VALUE(old_db.values[old_pos].n_conflict_lock, new_db.values[new_pos].n_conflict_lock, itv);
-			new_db.values[new_pos].n_conflict_snapshot_diff = S_VALUE(old_db.values[old_pos].n_conflict_snapshot, new_db.values[new_pos].n_conflict_snapshot, itv);
-			new_db.values[new_pos].n_conflict_bufferpin_diff = S_VALUE(old_db.values[old_pos].n_conflict_bufferpin, new_db.values[new_pos].n_conflict_bufferpin, itv);
-			new_db.values[new_pos].n_conflict_startup_deadlock_diff = S_VALUE(old_db.values[old_pos].n_conflict_startup_deadlock, new_db.values[new_pos].n_conflict_startup_deadlock, itv);
 			new_db.values[new_pos].n_temp_files_diff = S_VALUE(old_db.values[old_pos].n_temp_files, new_db.values[new_pos].n_temp_files, itv);
 			new_db.values[new_pos].n_temp_bytes_diff = S_VALUE(old_db.values[old_pos].n_temp_bytes, new_db.values[new_pos].n_temp_bytes, itv);
-			new_db.values[new_pos].n_deadlocks_diff = S_VALUE(old_db.values[old_pos].n_deadlocks, new_db.values[new_pos].n_deadlocks, itv);
-			new_db.values[new_pos].n_block_read_time_diff = S_VALUE(old_db.values[old_pos].n_block_read_time, new_db.values[new_pos].n_block_read_time, itv);
-			new_db.values[new_pos].n_block_write_time_diff = S_VALUE(old_db.values[old_pos].n_block_write_time, new_db.values[new_pos].n_block_write_time, itv);
+			if (new_db.track_io_timing) {
+				new_db.values[new_pos].n_block_read_time_diff = MINIMUM(S_VALUE(old_db.values[old_pos].n_block_read_time, new_db.values[new_pos].n_block_read_time, itv)/10000.0, 100.0);
+				new_db.values[new_pos].n_block_write_time_diff = MINIMUM(S_VALUE(old_db.values[old_pos].n_block_write_time, new_db.values[new_pos].n_block_write_time, itv)/10000.0, 100.0);
+			}
 			old_pos++;
 			new_pos++;
 		} else if (old_db.values[old_pos].databaseid > new_db.values[new_pos].databaseid)
@@ -1257,6 +1254,7 @@ pg_stat get_postgres_stats(void)
 
 		resolve_database_and_user_ids(pg_stats_new.activity, resultcxt);
 		get_database_stats(&pg_stats_new.db, resultcxt);
+		pg_stats_new.db.track_io_timing = track_io_timing;
 
 		CommitTransactionCommand();
 		MemoryContextSwitchTo(resultcxt);
