@@ -60,6 +60,7 @@ logging_collector = 'on'
 log_directory = 'pg_log'
 log_line_prefix = '%u %m [%p] '
 log_filename = 'postgresql.log'
+track_io_timing = 'on'
 archive_mode = 'on'
 archive_command = 'true'
 max_wal_senders = 10

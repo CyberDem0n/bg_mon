@@ -284,7 +284,7 @@ static void device_io_output(struct evbuffer *evb, device_stat *stats, int id)
 	evbuffer_add_printf(evb, "}");
 }
 
-static const char *process_type(pg_stat p)
+static const char *process_type(pg_stat_activity p)
 {
 
 	char *backend_names[] = {
@@ -314,7 +314,7 @@ static const char *process_type(pg_stat p)
 	return backend_names[p.type + 1];
 }
 
-static const char *get_query(pg_stat s)
+static const char *get_query(pg_stat_activity s)
 {
 	if (s.type == PG_LOGICAL_WORKER)
 		return s.ps.cmdline;
@@ -338,11 +338,13 @@ static const char *get_query(pg_stat s)
 	}
 }
 
-static struct evbuffer *prepare_statistics_output(struct timeval time, system_stat s, pg_stat_list p, disk_stats ds, net_stats ns)
+static struct evbuffer *prepare_statistics_output(struct timeval time, system_stat s, pg_stat p, disk_stats ds, net_stats ns)
 {
 	struct evbuffer *evb = evbuffer_new();
 	unsigned long long ts = (unsigned long long)time.tv_sec*1000 + (unsigned long long)((double)time.tv_usec/1000.0);
 
+	pg_stat_activity_list a = p.activity;
+	db_stat_list d = p.db;
 	cpu_stat c = s.cpu;
 	meminfo m = s.mem;
 	load_avg la = s.load_avg;
@@ -357,8 +359,8 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "\"cpu_cores\":%d,\"postgresql\":{\"version\":\"%s\"", c.cpu_count, PG_VERSION);
 	evbuffer_add_printf(evb, ",\"role\":\"%s\",", p.recovery_in_progress?"replica":"master");
 	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
-	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", p.total_connections, p.idle_in_transaction_connections);
-	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", p.active_connections, pg_start_time);
+	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", a.total_connections, a.idle_in_transaction_connections);
+	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", a.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\":{\"uptime\":%d,\"load_average\":", (int)(s.uptime / SC_CLK_TCK));
 	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g],\"cpu\":{\"user\":", la.run_1min, la.run_5min, la.run_15min);
 	evbuffer_add_printf(evb, "%2.1f,\"nice\": %2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
@@ -411,6 +413,46 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 		evbuffer_add_printf(evb, "},\"directory\":{\"name\":\"%s\",\"size\":%llu}}", device.directory, device.du);
 	}
 
+	if (d.pos > 0) {
+		evbuffer_add_printf(evb, "},\"databases\":{");
+		for (i = 0; i < d.pos; ++i) {
+			if (is_first) is_first = false;
+			else evbuffer_add_printf(evb, ",");
+			evbuffer_add_printf(evb, "%s:{", d.values[i].datname);
+			evbuffer_add_printf(evb, "\"xact\":{\"commit\":%ld,", d.values[i].n_xact_commit_diff);
+			evbuffer_add_printf(evb, "\"rollback\":%ld},", d.values[i].n_xact_rollback_diff);
+			evbuffer_add_printf(evb, "\"blocks\":{\"fetched\":%ld,", d.values[i].n_blocks_fetched_diff);
+			evbuffer_add_printf(evb, "\"hit\":%ld", d.values[i].n_blocks_hit_diff);
+			if (d.track_io_timing) {
+				evbuffer_add_printf(evb, ",\"read_time\":%.2f", d.values[i].n_block_read_time_diff); /* percents */
+				evbuffer_add_printf(evb, ",\"write_time\":%.2f", d.values[i].n_block_write_time_diff);
+			}
+			evbuffer_add_printf(evb, "},\"tuples\":{\"returned\":%ld,", d.values[i].n_tuples_returned_diff);
+			evbuffer_add_printf(evb, "\"fetched\":%ld,", d.values[i].n_tuples_fetched_diff);
+			evbuffer_add_printf(evb, "\"updated\":%ld,", d.values[i].n_tuples_updated_diff);
+			evbuffer_add_printf(evb, "\"inserted\":%ld,", d.values[i].n_tuples_inserted_diff);
+			evbuffer_add_printf(evb, "\"deleted\":%ld},", d.values[i].n_tuples_deleted_diff);
+			evbuffer_add_printf(evb, "\"temp\":{\"files\":%ld,", d.values[i].n_temp_files_diff);
+			evbuffer_add_printf(evb, "\"bytes\":%ld},", d.values[i].n_temp_bytes_diff);
+			if (p.recovery_in_progress) {
+				evbuffer_add_printf(evb, "\"conflict\":{\"tablespace\":%ld,", d.values[i].n_conflict_tablespace);
+				evbuffer_add_printf(evb, "\"lock\":%ld,", d.values[i].n_conflict_lock);
+				evbuffer_add_printf(evb, "\"snapshot\":%ld,", d.values[i].n_conflict_snapshot);
+				evbuffer_add_printf(evb, "\"bufferpin\":%ld,", d.values[i].n_conflict_bufferpin);
+				evbuffer_add_printf(evb, "\"startup_deadlock\":%ld},", d.values[i].n_conflict_startup_deadlock);
+			}
+			evbuffer_add_printf(evb, "\"deadlocks\":%ld", d.values[i].n_deadlocks);
+#if PG_VERSION_NUM >= 120000
+			if (d.values[i].n_checksum_failures) {
+				evbuffer_add_printf(evb, ",\"checksum_failures\":%ld,", d.values[i].n_checksum_failures);
+				evbuffer_add_printf(evb, "\"last_checksum_failure\":%lu", timestamptz_to_time_t(d.values[i].last_checksum_failure));
+			}
+#endif
+			evbuffer_add_printf(evb, "}");
+		}
+	}
+
+	is_first = true;
 	evbuffer_add_printf(evb, "},\"net_stats\":{");
 	for (i = 0; i < ns.size; ++i)
 		if (ns.values[i].is_used && ns.values[i].has_statistics) {
@@ -432,8 +474,8 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 
 	is_first = true;
 	evbuffer_add_printf(evb, "},\"processes\":[");
-	for (i = 0; i < p.pos; ++i) {
-		pg_stat s = p.values[i];
+	for (i = 0; i < a.pos; ++i) {
+		pg_stat_activity s = a.values[i];
 		if (s.type != PG_BACKEND || s.query != NULL || s.state >= STATE_RUNNING || s.is_blocker) {
 			proc_stat ps = s.ps;
 			proc_io io = ps.io;
@@ -597,7 +639,7 @@ static void update_aggregated_statistics(time_t time)
 static void update_statistics(struct timeval time)
 {
 	system_stat s = get_system_stats();
-	pg_stat_list p = get_postgres_stats();
+	pg_stat p = get_postgres_stats();
 	disk_stats d =  get_disk_stats();
 	net_stats n = get_net_stats();
 
