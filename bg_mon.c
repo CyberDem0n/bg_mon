@@ -354,7 +354,6 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	pressure *p_io = s.p_io;
 
 	bool is_first = true;
-	char buffer[20];
 	size_t i;
 
 	evbuffer_add_printf(evb, "{\"hostname\":\"%s\",\"time\":%llu,\"sysname\":\"Linux: %s\",", s.hostname, ts, s.sysname);
@@ -362,16 +361,11 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, ",\"role\":\"%s\",", p.recovery_in_progress?"replica":"master");
 
 	evbuffer_add_printf(evb, "\"wal_metrics\":{\"is_wal_replay_paused\":%s,", w.is_wal_replay_paused?"true":"false");
-
-	evbuffer_add_printf(evb, "\"last_wal_replay_lsn\":%ld,", w.last_wal_replay_lsn);
-	evbuffer_add_printf(evb, "\"current_wal_lsn\":%ld,", w.current_wal_lsn);
+	evbuffer_add_printf(evb, "\"last_xact_replay_timestamp\":%ld,", w.last_xact_replay_timestamp);
 	evbuffer_add_printf(evb, "\"wal_diff\":%lu,", w.current_diff);
 	evbuffer_add_printf(evb, "\"wal_receive_diff\":%lu,", w.receive_diff);
-	evbuffer_add_printf(evb, "\"wal_replay_diff\":%lu,", w.replay_diff);
+	evbuffer_add_printf(evb, "\"wal_replay_diff\":%lu},", w.replay_diff);
 
-	sprintf(buffer, "%ld", w.last_wal_receive_lsn);
-	evbuffer_add_printf(evb, "\"last_wal_receive_lsn\":%s,", w.last_wal_receive_lsn ? buffer : "null");
-	evbuffer_add_printf(evb, "\"last_xact_replay_timestamp\":%ld},", w.last_xact_replay_timestamp);
 	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", a.total_connections, a.idle_in_transaction_connections);
 	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", a.active_connections, pg_start_time);
