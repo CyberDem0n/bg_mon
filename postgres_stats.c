@@ -947,8 +947,8 @@ static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 {
 	unsigned long long itv;
 
-	wal_metrics o = old_stats.activity.wal_metrics;
-	wal_metrics n = new_stats.activity.wal_metrics;
+	wal_metrics o = old_stats.wal_metrics;
+	wal_metrics n = new_stats.wal_metrics;
 
 	if (old_stats.uptime == 0) return;
 	itv = new_stats.uptime - old_stats.uptime;
@@ -1123,16 +1123,6 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 
 	MemoryContextDelete(othercxt);
 
-	pg_stats->wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
-	pg_stats->wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
-
-	pg_stats->wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
-	pg_stats->wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
-	#if PG_VERSION_NUM >= 130000 
-		pg_stats->wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
-	#else
-		pg_stats->wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
-	#endif
 	if (init_postgres)
 	{
 #if PG_VERSION_NUM >= 110000
@@ -1284,6 +1274,17 @@ pg_stat get_postgres_stats(void)
 	pg_stats_new.uptime = system_stats_old.uptime;
 
 	pg_stats_new.recovery_in_progress = RecoveryInProgress();
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
+	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
+	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
+
+	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
+	pg_stats_new.wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
+	#if PG_VERSION_NUM >= 130000 
+		pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
+	#else
+		pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
+	#endif
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
 

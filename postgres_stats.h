@@ -110,7 +110,6 @@ typedef struct {
 	int total_connections;
 	int active_connections;
 	int idle_in_transaction_connections;
-	wal_metrics wal_metrics;
 } pg_stat_activity_list;
 
 typedef struct {
@@ -164,6 +163,7 @@ typedef struct {
 	bool recovery_in_progress;
 	pg_stat_activity_list activity;
 	db_stat_list db;
+	wal_metrics wal_metrics;
 } pg_stat;
 
 void postgres_stats_init(void);
