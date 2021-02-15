@@ -887,7 +887,6 @@ static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_ac
 {
 	size_t old_pos = 0, new_pos = 0;
 
-
 	while (old_pos < old_activity.pos || new_pos < new_activity.pos) {
 		if (new_pos >= new_activity.pos)
 			old_activity.values[old_pos++].ps.free_cmdline = true;
@@ -909,8 +908,6 @@ static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_ac
 		else // old.pid < new.pid
 			old_activity.values[old_pos++].ps.free_cmdline = true;
 	}
-
-
 }
 
 static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned long long itv)
