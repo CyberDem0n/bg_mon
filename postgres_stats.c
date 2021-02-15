@@ -882,7 +882,6 @@ static void calculate_stats_diff(pg_stat_activity *old_stat, pg_stat_activity *n
 	n->utime_diff = SP_VALUE_100(o->utime, n->utime, itv);
 	n->stime_diff = SP_VALUE_100(o->stime, n->stime, itv);
 	n->gtime_diff = SP_VALUE_100(o->gtime, n->gtime, itv);
-
 }
 
 static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_activity_list new_activity, unsigned long long itv)
