@@ -93,14 +93,14 @@ typedef struct {
 } pg_stat_activity;
 
 typedef struct {
-		bool is_wal_replay_paused;
-		TimestampTz last_xact_replay_timestamp; 
-		XLogRecPtr last_wal_replay_lsn;
-		XLogRecPtr current_wal_lsn;
-		XLogRecPtr last_wal_receive_lsn;
-		int64 current_diff;
-		int64 receive_diff;
-		int64 replay_diff;
+	bool is_wal_replay_paused;
+	TimestampTz last_xact_replay_timestamp; 
+	XLogRecPtr last_wal_replay_lsn;
+	XLogRecPtr current_wal_lsn;
+	XLogRecPtr last_wal_receive_lsn;
+	int64 current_diff;
+	int64 receive_diff;
+	int64 replay_diff;
 } wal_metrics;
 
 typedef struct {
