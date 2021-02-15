@@ -30,7 +30,6 @@
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
 
-
 #include "system_stats.h"
 #include "postgres_stats.h"
 
@@ -882,7 +881,6 @@ static void calculate_stats_diff(pg_stat_activity *old_stat, pg_stat_activity *n
 	n->utime_diff = SP_VALUE_100(o->utime, n->utime, itv);
 	n->stime_diff = SP_VALUE_100(o->stime, n->stime, itv);
 	n->gtime_diff = SP_VALUE_100(o->gtime, n->gtime, itv);
-
 }
 
 static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_activity_list new_activity, unsigned long long itv)
@@ -948,7 +946,6 @@ static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned lon
 		else /* old_db.values[old_pos].databaseid < new_db.values[new_pos].databaseid */
 			old_pos++;
 	}
-
 }
 
 static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
