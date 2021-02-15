@@ -887,8 +887,6 @@ static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_ac
 {
 	size_t old_pos = 0, new_pos = 0;
 
-	wal_metrics o = old_activity.wal_metrics;
-	wal_metrics n = new_activity.wal_metrics;
 
 	while (old_pos < old_activity.pos || new_pos < new_activity.pos) {
 		if (new_pos >= new_activity.pos)
@@ -913,9 +911,6 @@ static void diff_pg_stat_activity(pg_stat_activity_list old_activity, pg_stat_ac
 	}
 
 
-	n.current_diff = S_VALUE(o.current_wal_lsn, n.current_wal_lsn, itv) / 1024;
-	n.receive_diff = S_VALUE(o.last_wal_receive_lsn, o.last_wal_receive_lsn, itv) / 1024;
-	n.replay_diff = S_VALUE(o.last_wal_replay_lsn, o.last_wal_replay_lsn, itv) / 1024;
 }
 
 static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned long long itv)
@@ -952,11 +947,18 @@ static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 {
 	unsigned long long itv;
 
+	wal_metrics o = old_stats.activity.wal_metrics;
+	wal_metrics n = new_stats.activity.wal_metrics;
+
 	if (old_stats.uptime == 0) return;
 	itv = new_stats.uptime - old_stats.uptime;
 
 	diff_pg_stat_activity(old_stats.activity, new_stats.activity, itv);
 	diff_db_stats(old_stats.db, new_stats.db, itv);
+
+	n.current_diff = S_VALUE(o.current_wal_lsn, n.current_wal_lsn, itv) / 1024;
+	n.receive_diff = S_VALUE(o.last_wal_receive_lsn, o.last_wal_receive_lsn, itv) / 1024;
+	n.replay_diff  = S_VALUE(o.last_wal_replay_lsn, o.last_wal_replay_lsn, itv) / 1024;
 }
 
 static double calculate_age(TimestampTz ts)
