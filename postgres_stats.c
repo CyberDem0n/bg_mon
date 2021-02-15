@@ -1077,7 +1077,7 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 			 * got some other backends connected which already initialized system caches.
 			 * In such case there will be entries with valid databaseid and userid. */
 			if (ps.userid && ps.databaseid && IsInitProcessingMode())
-				init_postgres = true;
+				init_postgres = !IsBinaryUpgrade; /* avoid opening a connection during pg_upgrade */
 
 			if (ps.state == STATE_IDLEINTRANSACTION)
 			{
