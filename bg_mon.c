@@ -345,7 +345,7 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 
 	pg_stat_activity_list a = p.activity;
 	db_stat_list d = p.db;
-	wal_metrics w = a.wal_metrics;
+	wal_metrics w = p.wal_metrics;
 	cpu_stat c = s.cpu;
 	meminfo m = s.mem;
 	load_avg la = s.load_avg;
