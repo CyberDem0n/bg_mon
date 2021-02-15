@@ -946,7 +946,6 @@ static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned lon
 		else /* old_db.values[old_pos].databaseid < new_db.values[new_pos].databaseid */
 			old_pos++;
 	}
-
 }
 
 static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
