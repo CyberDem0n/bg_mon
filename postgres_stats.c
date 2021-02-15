@@ -30,7 +30,6 @@
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
 
-
 #include "system_stats.h"
 #include "postgres_stats.h"
 
