@@ -15,6 +15,7 @@
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
 #include "pgstat.h"
+#include "replication/walreceiver.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -943,11 +944,18 @@ static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
 {
 	unsigned long long itv;
 
+	wal_metrics o = old_stats.wal_metrics;
+	wal_metrics n = new_stats.wal_metrics;
+
 	if (old_stats.uptime == 0) return;
 	itv = new_stats.uptime - old_stats.uptime;
 
 	diff_pg_stat_activity(old_stats.activity, new_stats.activity, itv);
 	diff_db_stats(old_stats.db, new_stats.db, itv);
+
+	n.current_diff = S_VALUE(o.current_wal_lsn, n.current_wal_lsn, itv) / 1024;
+	n.receive_diff = S_VALUE(o.last_wal_receive_lsn, o.last_wal_receive_lsn, itv) / 1024;
+	n.replay_diff  = S_VALUE(o.last_wal_replay_lsn, o.last_wal_replay_lsn, itv) / 1024;
 }
 
 static double calculate_age(TimestampTz ts)
@@ -1061,7 +1069,7 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 			ps.userid = beentry->st_userid;
 			ps.state = beentry->st_state;
 
-			/* it is proven experimetally that it is safe to run InitPostgres only when we
+			/* it is proven experimentally that it is safe to run InitPostgres only when we
 			 * got some other backends connected which already initialized system caches.
 			 * In such case there will be entries with valid databaseid and userid. */
 			if (ps.userid && ps.databaseid && IsInitProcessingMode())
@@ -1263,6 +1271,16 @@ pg_stat get_postgres_stats(void)
 	pg_stats_new.uptime = system_stats_old.uptime;
 
 	pg_stats_new.recovery_in_progress = RecoveryInProgress();
+	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
+	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
+
+	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
+	pg_stats_new.wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
+#if PG_VERSION_NUM >= 130000 
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
+#else
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
+#endif
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
 
