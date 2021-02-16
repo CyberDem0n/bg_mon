@@ -358,18 +358,18 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 
 	evbuffer_add_printf(evb, "{\"hostname\":\"%s\",\"time\":%llu,\"sysname\":\"Linux: %s\",", s.hostname, ts, s.sysname);
 	evbuffer_add_printf(evb, "\"cpu_cores\":%d,\"postgresql\":{\"version\":\"%s\"", c.cpu_count, PG_VERSION);
-	evbuffer_add_printf(evb, ",\"role\":\"%s\",", p.recovery_in_progress?"replica":"master");
+	evbuffer_add_printf(evb, ",\"role\":\"%s\",\"wal\":{", p.recovery_in_progress?"replica":"master");
 
 	if (p.recovery_in_progress) {
-		evbuffer_add_printf(evb, "\"wal\":{\"replay_paused\":%s,", w.is_wal_replay_paused?"true":"false");
+		evbuffer_add_printf(evb, "\"replay_paused\":%s,", w.is_wal_replay_paused?"true":"false");
 		evbuffer_add_printf(evb, "\"replay_timestamp\":%ld,", timestamptz_to_time_t(w.last_xact_replay_timestamp));  /* unix seconds! */
 		evbuffer_add_printf(evb, "\"receive\":%lu,", w.receive_diff);
-		evbuffer_add_printf(evb, "\"replay\":%lu},", w.replay_diff);
+		evbuffer_add_printf(evb, "\"replay\":%lu", w.replay_diff);
 	} else {
-		evbuffer_add_printf(evb, "\"wal\":{\"written\":%lu},", w.current_diff);
+		evbuffer_add_printf(evb, "\"written\":%lu", w.current_diff);
 	}
 
-	evbuffer_add_printf(evb, "\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
+	evbuffer_add_printf(evb, "},\"data_directory\":\"%s\",\"connections\":{\"max\":%d,", DataDir, MaxConnections);
 	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", a.total_connections, a.idle_in_transaction_connections);
 	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", a.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\":{\"uptime\":%d,\"load_average\":", (int)(s.uptime / SC_CLK_TCK));
