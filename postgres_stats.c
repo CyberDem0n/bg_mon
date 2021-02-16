@@ -1276,11 +1276,11 @@ pg_stat get_postgres_stats(void)
 
 	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
 	pg_stats_new.wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
-	#if PG_VERSION_NUM >= 130000 
-		pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
-	#else
-		pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
-	#endif
+#if PG_VERSION_NUM >= 130000 
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
+#else
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
+#endif
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
 
