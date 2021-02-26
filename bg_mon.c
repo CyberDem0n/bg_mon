@@ -373,18 +373,18 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "\"total\":%d,\"idle_in_transaction\":%d", a.total_connections, a.idle_in_transaction_connections);
 	evbuffer_add_printf(evb, ",\"active\":%d},\"start_time\":%lu},", a.active_connections, pg_start_time);
 	evbuffer_add_printf(evb, "\"system_stats\":{\"uptime\":%d,\"load_average\":", (int)(s.uptime / SC_CLK_TCK));
-	evbuffer_add_printf(evb, "[%4.6g, %4.6g, %4.6g],\"cpu\":{\"user\":", la.run_1min, la.run_5min, la.run_15min);
-	evbuffer_add_printf(evb, "%2.1f,\"nice\": %2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
+	evbuffer_add_printf(evb, "[%.6g,%.6g,%.6g],\"cpu\":{\"user\":", la.run_1min, la.run_5min, la.run_15min);
+	evbuffer_add_printf(evb, "%2.1f,\"nice\":%2.1f,\"system\":%2.1f,", c.utime_diff, c.ntime_diff, c.stime_diff);
 	evbuffer_add_printf(evb, "\"idle\":%2.1f,\"iowait\":%2.1f,\"steal\":%2.1f", c.idle_diff, c.iowait_diff, c.steal_diff);
 	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\": %lu}", s.ctxt_diff, s.procs_running, s.procs_blocked);
 
 	if (s.pressure) {
-		evbuffer_add_printf(evb, ",\"pressure\":{\"cpu\":[%.6g, %.6g, %.6g, %lu],",
+		evbuffer_add_printf(evb, ",\"pressure\":{\"cpu\":[%.6g,%.6g,%.6g,%lu],",
 							p_cpu[0].avg10, p_cpu[0].avg60, p_cpu[0].avg300, p_cpu[0].total);
-		evbuffer_add_printf(evb, "\"memory\":{\"some\":[%.6g, %.6g, %.6g, %lu],\"full\":[%.6g, %.6g, %.6g, %lu]},",
+		evbuffer_add_printf(evb, "\"memory\":{\"some\":[%.6g,%.6g,%.6g,%lu],\"full\":[%.6g,%.6g,%.6g,%lu]},",
 							p_memory[0].avg10, p_memory[0].avg60, p_memory[0].avg300, p_memory[0].total,
 							p_memory[1].avg10, p_memory[1].avg60, p_memory[1].avg300, p_memory[1].total);
-		evbuffer_add_printf(evb, "\"io\":{\"some\":[%.6g, %.6g, %.6g, %lu],\"full\":[%.6g, %.6g, %.6g, %lu]}}",
+		evbuffer_add_printf(evb, "\"io\":{\"some\":[%.6g,%.6g,%.6g,%lu],\"full\":[%.6g,%.6g,%.6g,%lu]}}",
 							p_io[0].avg10, p_io[0].avg60, p_io[0].avg300, p_io[0].total,
 							p_io[1].avg10, p_io[1].avg60, p_io[1].avg300, p_io[1].total);
 	}
