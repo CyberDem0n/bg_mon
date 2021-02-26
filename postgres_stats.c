@@ -1268,16 +1268,17 @@ pg_stat get_postgres_stats(void)
 	pg_stats_new.uptime = system_stats_old.uptime;
 
 	pg_stats_new.recovery_in_progress = RecoveryInProgress();
-	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
-	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
-
-	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
 	pg_stats_new.wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
+
 #if PG_VERSION_NUM >= 130000
-	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr();
 #else
 	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
 #endif
+	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
+	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
+	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
+
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
 
