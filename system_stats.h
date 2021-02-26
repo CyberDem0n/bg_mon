@@ -59,7 +59,7 @@ typedef struct {
 	float avg10;
 	float avg60;
 	float avg300;
-	float total;
+	uint64 total;
 } pressure;
 
 typedef struct {

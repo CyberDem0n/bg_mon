@@ -100,7 +100,7 @@ static void read_pressure(pressure *result, pressure_res resource)
 		/* There could be either one or two lines */
 		for (int i = 0; i < 2; i++)
 		{
-			if (fscanf(f, "%s avg10=%f avg60=%f avg300=%f total=%f",
+			if (fscanf(f, "%s avg10=%f avg60=%f avg300=%f total=%lu",
 					   type, &p.avg10, &p.avg60, &p.avg300, &p.total) != 5)
 				break;
 
