@@ -940,22 +940,19 @@ static void diff_db_stats(db_stat_list old_db, db_stat_list new_db, unsigned lon
 	}
 }
 
-static void diff_pg_stats(pg_stat old_stats, pg_stat new_stats)
+static void diff_pg_stats(pg_stat old_stats, pg_stat *new_stats)
 {
 	unsigned long long itv;
 
-	wal_metrics o = old_stats.wal_metrics;
-	wal_metrics n = new_stats.wal_metrics;
-
 	if (old_stats.uptime == 0) return;
-	itv = new_stats.uptime - old_stats.uptime;
+	itv = new_stats->uptime - old_stats.uptime;
 
-	diff_pg_stat_activity(old_stats.activity, new_stats.activity, itv);
-	diff_db_stats(old_stats.db, new_stats.db, itv);
+	diff_pg_stat_activity(old_stats.activity, new_stats->activity, itv);
+	diff_db_stats(old_stats.db, new_stats->db, itv);
 
-	n.current_diff = S_VALUE(o.current_wal_lsn, n.current_wal_lsn, itv) / 1024;
-	n.receive_diff = S_VALUE(o.last_wal_receive_lsn, o.last_wal_receive_lsn, itv) / 1024;
-	n.replay_diff  = S_VALUE(o.last_wal_replay_lsn, o.last_wal_replay_lsn, itv) / 1024;
+	new_stats->wal_metrics.current_diff = S_VALUE(old_stats.wal_metrics.current_wal_lsn, new_stats->wal_metrics.current_wal_lsn, itv) / 1024;
+	new_stats->wal_metrics.receive_diff = S_VALUE(old_stats.wal_metrics.last_wal_receive_lsn, new_stats->wal_metrics.last_wal_receive_lsn, itv) / 1024;
+	new_stats->wal_metrics.replay_diff = S_VALUE(old_stats.wal_metrics.last_wal_replay_lsn, new_stats->wal_metrics.last_wal_replay_lsn, itv) / 1024;
 }
 
 static double calculate_age(TimestampTz ts)
@@ -1271,23 +1268,24 @@ pg_stat get_postgres_stats(void)
 	pg_stats_new.uptime = system_stats_old.uptime;
 
 	pg_stats_new.recovery_in_progress = RecoveryInProgress();
-	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
-	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
-
-	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
 	pg_stats_new.wal_metrics.current_wal_lsn = GetXLogWriteRecPtr();
-#if PG_VERSION_NUM >= 130000 
-	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvFlushRecPtr(NULL, NULL);
+
+#if PG_VERSION_NUM >= 130000
+	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr();
 #else
 	pg_stats_new.wal_metrics.last_wal_receive_lsn = GetWalRcvWriteRecPtr(NULL, NULL);
 #endif
+	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
+	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
+	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
+
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
 
 	if (pg_stats_new.db.pos > 1)
 		qsort(pg_stats_new.db.values, pg_stats_new.db.pos, sizeof(db_stat), db_stat_cmp);
 
-	diff_pg_stats(pg_stats_current, pg_stats_new);
+	diff_pg_stats(pg_stats_current, &pg_stats_new);
 
 	pg_stats_tmp = pg_stats_current;
 	pg_stats_current = pg_stats_new;

@@ -94,7 +94,7 @@ typedef struct {
 
 typedef struct {
 	bool is_wal_replay_paused;
-	TimestampTz last_xact_replay_timestamp; 
+	TimestampTz last_xact_replay_timestamp;
 	XLogRecPtr last_wal_replay_lsn;
 	XLogRecPtr current_wal_lsn;
 	XLogRecPtr last_wal_receive_lsn;
