@@ -379,12 +379,12 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 	evbuffer_add_printf(evb, "},\"ctxt\":%lu,\"processes\":{\"running\":%lu,\"blocked\": %lu}", s.ctxt_diff, s.procs_running, s.procs_blocked);
 
 	if (s.pressure) {
-		evbuffer_add_printf(evb, ",\"pressure\":{\"cpu\":[%4.6g, %4.6g, %4.6g, %4.6g],",
+		evbuffer_add_printf(evb, ",\"pressure\":{\"cpu\":[%.6g, %.6g, %.6g, %lu],",
 							p_cpu[0].avg10, p_cpu[0].avg60, p_cpu[0].avg300, p_cpu[0].total);
-		evbuffer_add_printf(evb, "\"memory\":{\"some\":[%4.6g, %4.6g, %4.6g, %4.6g],\"full\":[%4.6g, %4.6g, %4.6g, %4.6g]},",
+		evbuffer_add_printf(evb, "\"memory\":{\"some\":[%.6g, %.6g, %.6g, %lu],\"full\":[%.6g, %.6g, %.6g, %lu]},",
 							p_memory[0].avg10, p_memory[0].avg60, p_memory[0].avg300, p_memory[0].total,
 							p_memory[1].avg10, p_memory[1].avg60, p_memory[1].avg300, p_memory[1].total);
-		evbuffer_add_printf(evb, "\"io\":{\"some\":[%4.6g, %4.6g, %4.6g, %4.6g],\"full\":[%4.6g, %4.6g, %4.6g, %4.6g]}}",
+		evbuffer_add_printf(evb, "\"io\":{\"some\":[%.6g, %.6g, %.6g, %lu],\"full\":[%.6g, %.6g, %.6g, %lu]}}",
 							p_io[0].avg10, p_io[0].avg60, p_io[0].avg300, p_io[0].total,
 							p_io[1].avg10, p_io[1].avg60, p_io[1].avg300, p_io[1].total);
 	}
