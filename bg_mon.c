@@ -755,6 +755,7 @@ restart:
 	 * Main loop: do this until the SIGTERM handler tells us to terminate
 	 */
 	while (!got_sigterm) {
+		int		rc;
 		double	naptime;
 
 		next_run.tv_sec += bg_mon_naptime_guc; /* adjust wakeup target time */
@@ -768,22 +769,22 @@ restart:
 
 		if (naptime <= 0) { // something is very slow
 			next_run = current_time; // reschedule next run
-		} else {
-#if PG_VERSION_NUM >= 100000
-			int rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   naptime,
-						   PG_WAIT_EXTENSION);
-#else
-			int rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   naptime);
-#endif
-			ResetLatch(MyLatch);
-			/* emergency bailout if postmaster has died */
-			if (rc & WL_POSTMASTER_DEATH)
-				proc_exit(1);
+			naptime = 0;
 		}
+#if PG_VERSION_NUM >= 100000
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   naptime,
+					   PG_WAIT_EXTENSION);
+#else
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   naptime);
+#endif
+		ResetLatch(MyLatch);
+		/* emergency bailout if postmaster has died */
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
 
 		/*
 		 * In case of a SIGHUP, reload the configuration and restart the web server.
