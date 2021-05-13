@@ -29,6 +29,7 @@
 #include "storage/ipc.h"
 #include "storage/predicate_internals.h"
 #include "storage/procarray.h"
+#include "storage/proc.h"
 
 #include "system_stats.h"
 #include "postgres_stats.h"
@@ -1277,7 +1278,11 @@ pg_stat get_postgres_stats(void)
 #endif
 	pg_stats_new.wal_metrics.last_wal_replay_lsn = GetXLogReplayRecPtr(NULL);
 	pg_stats_new.wal_metrics.last_xact_replay_timestamp = GetLatestXTime();
+#if PG_VERSION_NUM >= 140000
+	pg_stats_new.wal_metrics.is_wal_replay_paused = GetRecoveryPauseState() != RECOVERY_NOT_PAUSED;
+#else
 	pg_stats_new.wal_metrics.is_wal_replay_paused = RecoveryIsPaused();
+#endif
 
 
 	merge_stats(&pg_stats_new.activity, proc_stats);
