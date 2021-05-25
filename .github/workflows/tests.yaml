@@ -23,13 +23,14 @@ jobs:
         - '11'
         - '12'
         - '13'
+        - '14'
 
     steps:
     - uses: actions/checkout@v1
     - name: Set up packages
       run: |
         set -e
-        sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+        sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main $PG" > /etc/apt/sources.list.d/pgdg.list'
         sudo apt-get update
         sudo apt-get install -yq --no-install-suggests --no-install-recommends curl postgresql-common lcov libevent-dev pv brotli libbrotli1 libbrotli-dev
         # forbid creation of a main cluster when package is installed
