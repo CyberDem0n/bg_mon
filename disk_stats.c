@@ -299,46 +299,58 @@ static void read_io_stats(device_stats *ds)
 	unsigned long read_sectors_or_write_completed, read_time_or_write_sectors;
 	unsigned long write_completed, write_merges, write_sectors;
 	unsigned int ios_in_progress, write_time, total_time, weighted_time;
+	unsigned long discard_completed, discard_merges, discard_sectors, discard_time;
+	unsigned long flush_completed, flush_time;
 	device_stat *stats = ds->values;
 	FILE *io = fopen("/proc/diskstats", "r");
 
 	if (io == NULL) return;
 
-	while (i < ds->size && fgets(buf, sizeof(buf), io)) {
-		n = sscanf(buf, "%*u %*u %s %lu %lu %lu %lu %lu %lu %lu %u %u %u %u",
+	while (fgets(buf, sizeof(buf), io)) {
+		i = sscanf(buf, "%*u %*u %s %lu %lu %lu %lu %lu %lu %lu %u %u %u %u %lu %lu %lu %lu %lu %lu",
 					device_name, &read_completed, &read_merges_or_read_sectors,
 					&read_sectors_or_write_completed, &read_time_or_write_sectors,
 					&write_completed, &write_merges, &write_sectors, &write_time,
-					&ios_in_progress, &total_time, &weighted_time);
-		if (n == 12) {
-			for (n = 0; n < ds->size; ++n) {
-				if (strcmp(stats[n].name, device_name) == 0) {
-					stats[n].is_used = true;
-					stats[n].read_completed = read_completed;
-					stats[n].read_merges = read_merges_or_read_sectors;
-					stats[n].read_sectors = read_sectors_or_write_completed;
-					stats[n].read_time = (unsigned int)read_time_or_write_sectors;
-					stats[n].write_completed = write_completed;
-					stats[n].write_merges = write_merges;
-					stats[n].write_sectors = write_sectors;
-					stats[n].write_time = write_time;
-					stats[n].ios_in_progress = ios_in_progress;
-					stats[n].total_time = total_time;
-					stats[n].weighted_time = weighted_time;
-					stats[n].extended = true;
+					&ios_in_progress, &total_time, &weighted_time,
+					&discard_completed, &discard_merges, &discard_sectors,
+					&discard_time, &flush_completed, &flush_time);
+		if (i < 12 && i != 5) continue;
+
+		for (n = 0; n < ds->size; ++n) {
+			if (strcmp(stats[n].name, device_name) != 0) continue;
+
+			stats[n].fields = i;
+			if (i == 5) {
+				stats[n].read_completed = read_completed;
+				stats[n].read_sectors = read_merges_or_read_sectors;
+				stats[n].write_completed = read_sectors_or_write_completed;
+				stats[n].write_sectors = read_time_or_write_sectors;
+			} else {
+				stats[n].read_completed = read_completed;
+				stats[n].read_merges = read_merges_or_read_sectors;
+				stats[n].read_sectors = read_sectors_or_write_completed;
+				stats[n].read_time = (unsigned int)read_time_or_write_sectors;
+				stats[n].write_completed = write_completed;
+				stats[n].write_merges = write_merges;
+				stats[n].write_sectors = write_sectors;
+				stats[n].write_time = write_time;
+				stats[n].ios_in_progress = ios_in_progress;
+				stats[n].total_time = total_time;
+				stats[n].weighted_time = weighted_time;
+
+				if (i >= 16) {
+					stats[n].discard_completed = discard_completed;
+					stats[n].discard_merges = discard_merges;
+					stats[n].discard_sectors = discard_sectors;
+					stats[n].discard_time = discard_time;
+
+					if (i >= 18) {
+						stats[n].flush_completed = flush_completed;
+						stats[n].flush_time = flush_time;
+					}
 				}
 			}
-		} else if (n == 5) {
-			for (n = 0; n < ds->size; ++n) {
-				if (strcmp(stats[n].name, device_name) == 0) {
-					stats[n].is_used = true;
-					stats[n].read_completed = read_completed;
-					stats[n].read_sectors = read_merges_or_read_sectors;
-					stats[n].write_completed = read_sectors_or_write_completed;
-					stats[n].write_sectors = read_time_or_write_sectors;
-				}
-			}
-		} else continue;
+		}
 	}
 	fclose(io);
 }
@@ -356,9 +368,10 @@ static void diff_disk_stats(device_stats *new_stats)
 	itv = new_stats->uptime - disk_stats_old.dstats.uptime;
 
 	for (i = 0; i < new_stats->size; ++i) {
+		double cmpl_diff, tput;
 		device_stat *n = new_stats->values + i;
 
-		while (j < disk_stats_old.dstats.size && !disk_stats_old.dstats.values[j].is_used)
+		while (j < disk_stats_old.dstats.size && disk_stats_old.dstats.values[j].fields == 0)
 			++j;
 
 		if (j >= disk_stats_old.dstats.size)
@@ -366,26 +379,51 @@ static void diff_disk_stats(device_stats *new_stats)
 
 		o = disk_stats_old.dstats.values[j++];
 
-		if (n->extended && o.extended) {
-			double cmpl_diff = n->read_completed + n->write_completed - o.read_completed - o.write_completed;
-			double tput = cmpl_diff * SC_CLK_TCK / itv / 10.0;
-			n->util = MINIMUM(S_VALUE(o.total_time, n->total_time, itv) / 10.0, 100.0);
-			n->average_service_time = tput ? n->util / tput : 0.0;
-			n->average_request_size = cmpl_diff ? (n->read_sectors - o.read_sectors
-					+ n->write_sectors - o.write_sectors) / cmpl_diff : 0.0;
-			n->average_queue_length = S_VALUE(o.weighted_time, n->weighted_time, itv) / 1000.0;
-			n->await = cmpl_diff ? (n->read_time - o.read_time + n->write_time - o.write_time) / cmpl_diff : 0.0;
-			cmpl_diff = n->read_completed - o.read_completed;
-			n->read_await = cmpl_diff ? (n->read_time - o.read_time) / cmpl_diff : 0.0;
-			cmpl_diff = n->write_completed - o.write_completed;
-			n->write_await = cmpl_diff ? (n->write_time - o.write_time) / cmpl_diff : 0.0;
-			n->read_merges_diff = S_VALUE(o.read_merges, n->read_merges, itv);
-			n->write_merges_diff = S_VALUE(o.write_merges, n->write_merges, itv);
-		}
+		/* IOPS */
 		n->read_completed_diff = S_VALUE(o.read_completed, n->read_completed, itv);
 		n->write_completed_diff = S_VALUE(o.write_completed, n->write_completed, itv);
-		n->read_diff = S_VALUE(o.read_sectors, n->read_sectors, itv) / 2.0;  /* to obtain diffs in kB */
-		n->write_diff = S_VALUE(o.write_sectors, n->write_sectors, itv) / 2.0;  /* to obtain diffs in kB */
+		n->discard_completed_diff = S_VALUE(o.discard_completed, n->discard_completed, itv);
+		n->flush_completed_diff = S_VALUE(o.flush_completed, n->flush_completed, itv);
+
+		/* The sector size is 512 bytes. By dividing by 2.0 we get the throughput in kB/s */
+		n->read_diff = S_VALUE(o.read_sectors, n->read_sectors, itv) / 2.0;
+		n->write_diff = S_VALUE(o.write_sectors, n->write_sectors, itv) / 2.0;
+		n->discard_diff = S_VALUE(o.discard_sectors, n->discard_sectors, itv) / 2.0;
+
+		/* Merges/s */
+		n->read_merges_diff = S_VALUE(o.read_merges, n->read_merges, itv);
+		n->write_merges_diff = S_VALUE(o.write_merges, n->write_merges, itv);
+		n->discard_merges_diff = S_VALUE(o.discard_merges, n->discard_merges, itv);
+
+		cmpl_diff = (n->read_completed - o.read_completed) +
+					(n->write_completed  - o.write_completed) +
+					(n->discard_completed - o.discard_completed);
+		tput = cmpl_diff * SC_CLK_TCK / itv / 10.0;
+
+		n->util = MINIMUM(S_VALUE(o.total_time, n->total_time, itv) / 10.0, 100.0);
+		n->average_service_time = tput ? n->util / tput : 0.0;
+		n->average_request_size = cmpl_diff ? (n->read_sectors - o.read_sectors +
+											   n->write_sectors - o.write_sectors +
+											   n->discard_sectors - o.discard_sectors) / cmpl_diff / 2.0: 0.0;
+		n->average_queue_length = S_VALUE(o.weighted_time, n->weighted_time, itv) / 1000.0;
+		n->await = cmpl_diff ? (n->read_time - o.read_time +
+								n->write_time - o.write_time +
+								n->discard_time - o.discard_time) / cmpl_diff : 0.0;
+
+		cmpl_diff = n->read_completed - o.read_completed;
+		n->read_await = cmpl_diff ? (n->read_time - o.read_time) / cmpl_diff : 0.0;
+		n->read_average_request_size = cmpl_diff ? (n->read_sectors - o.read_sectors) / cmpl_diff / 2.0 : 0.0;
+
+		cmpl_diff = n->write_completed - o.write_completed;
+		n->write_await = cmpl_diff ? (n->write_time - o.write_time) / cmpl_diff : 0.0;
+		n->write_average_request_size = cmpl_diff ? (n->write_sectors - o.write_sectors) / cmpl_diff / 2.0 : 0.0;
+
+		cmpl_diff = n->discard_completed - o.discard_completed;
+		n->discard_await = cmpl_diff ? (n->discard_time - o.discard_time) / cmpl_diff : 0.0;
+		n->discard_average_request_size = cmpl_diff ? (n->discard_sectors - o.discard_sectors) / cmpl_diff / 2.0 : 0.0;
+
+		cmpl_diff = n->flush_completed - o.flush_completed;
+		n->flush_await = cmpl_diff ? (n->flush_time - o.flush_time) / cmpl_diff : 0.0;
 	}
 }
 
@@ -456,7 +494,7 @@ static bool copy_device_stats(device_stats o, device_stats *n)
 	n->size = 0;
 
 	for (i = 0; i < o.size; ++i)
-		if (o.values[i].is_used)
+		if (o.values[i].fields > 0)
 			++len;
 		else {
 			FREE(o.values[i].name);
@@ -468,7 +506,7 @@ static bool copy_device_stats(device_stats o, device_stats *n)
 		n->values = repalloc(n->values, (n->len = len)*sizeof(device_stat));
 
 	for (i = 0; i < o.size; ++i)
-		if (o.values[i].is_used) {
+		if (o.values[i].fields > 0) {
 			memset(n->values + n->size, 0, sizeof(device_stat));
 			if (ret) n->values[n->size].slave_size = 0;
 			else {

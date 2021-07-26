@@ -262,13 +262,20 @@ static void device_io_output(struct evbuffer *evb, device_stat *stats, int id)
 	evbuffer_add_printf(evb, "\"name\":\"%s\",\"io\":{", d.name);
 	evbuffer_add_printf(evb, "\"read\":%.2f,\"reads_ps\":%.2f", d.read_diff, d.read_completed_diff);
 	evbuffer_add_printf(evb, ",\"write\":%.2f,\"writes_ps\":%.2f", d.write_diff, d.write_completed_diff);
-	if (d.extended) {
+	if (HAS_EXTENDED_STATS(d)) {
 		evbuffer_add_printf(evb, ",\"read_merges\":%.2f,\"write_merges\":%.2f", d.read_merges_diff, d.write_merges_diff);
 		evbuffer_add_printf(evb, ",\"average_queue_length\":%.2f", d.average_queue_length);
 		evbuffer_add_printf(evb, ",\"average_request_size\":%.2f", d.average_request_size);
-		evbuffer_add_printf(evb, ",\"average_service_time\":%.2f", d.average_service_time);
-		evbuffer_add_printf(evb, ",\"await\":%.2f,\"read_await\":%.2f", d.await, d.read_await);
-		evbuffer_add_printf(evb, ",\"write_await\":%.2f,\"util\":%.2f", d.write_await, d.util);
+		evbuffer_add_printf(evb, ",\"read_average_request_size\":%.2f", d.read_average_request_size);
+		evbuffer_add_printf(evb, ",\"write_average_request_size\":%.2f", d.write_average_request_size);
+		if (HAS_DISCARD_STATS(d))
+			evbuffer_add_printf(evb, ",\"discard_average_request_size\":%.2f", d.discard_average_request_size);
+		evbuffer_add_printf(evb, ",\"average_service_time\":%.2f,\"util\":%.2f", d.average_service_time, d.util);
+		evbuffer_add_printf(evb, ",\"await\":%.2f,\"read_await\":%.2f,\"write_await\":%.2f", d.await, d.read_await, d.write_await);
+		if (HAS_DISCARD_STATS(d))
+			evbuffer_add_printf(evb, ",\"discard_await\":%.2f", d.discard_await);
+		if (HAS_FLUSH_STATS(d))
+			evbuffer_add_printf(evb, ",\"flush_await\":%.2f", d.flush_await);
 	}
 	if (d.slave_size > 0) {
 		int n;
