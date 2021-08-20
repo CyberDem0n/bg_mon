@@ -1084,18 +1084,20 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 			} else if (ps.state == STATE_RUNNING) {
 				if (ps.databaseid)
 					pg_stats->active_connections++;
+				if (ps.type != PG_WAL_SENDER) {
 #if PG_VERSION_NUM >= 110000
-				if (*beentry->st_activity_raw)
-				{
-					char	*query;
-					oldcxt = MemoryContextSwitchTo(othercxt);
-					query = pgstat_clip_activity(beentry->st_activity_raw);
-					MemoryContextSwitchTo(oldcxt);
-					ps.query = json_escape_string(query);
-				}
+					if (*beentry->st_activity_raw)
+					{
+						char	*query;
+						oldcxt = MemoryContextSwitchTo(othercxt);
+						query = pgstat_clip_activity(beentry->st_activity_raw);
+						MemoryContextSwitchTo(oldcxt);
+						ps.query = json_escape_string(query);
+					}
 #else
-				ps.query = *beentry->st_activity ? json_escape_string(beentry->st_activity) : NULL;
+					ps.query = *beentry->st_activity ? json_escape_string(beentry->st_activity) : NULL;
 #endif
+				}
 			}
 
 			if (beentry->st_xact_start_timestamp)
