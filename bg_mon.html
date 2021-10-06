@@ -398,8 +398,11 @@ function apply(data, ns, t, only_charts) {
 		var ns_key = ns + key;
 		var el = document.getElementById(ns_key);
 		if (el != null) {
-			if (!only_charts)
+			if (!only_charts) {
 				el.innerHTML = getValue(data[key], ns_key);
+				if (ns_key == 'processes.query' && 'idle_in_transaction' in data)
+					el.innerHTML = 'idle in transaction ' + humanReadableTimeInterval(data['idle_in_transaction']) + ' (' + el.innerHTML + ')';
+			}
 		} else if (typeof(data[key]) == 'object') {
 			var cn = ns_key + '.chart';
 			if (cn in timeSeries) {
