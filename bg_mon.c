@@ -531,9 +531,9 @@ static struct evbuffer *prepare_statistics_output(struct timeval time, system_st
 			if (s.state == STATE_IDLEINTRANSACTION && s.idle_in_transaction_age > 0) {
 				evbuffer_add_printf(evb, ",\"query\":%s", s.query);
 				if (s.idle_in_transaction_age < 10)
-					evbuffer_add_printf(evb, ",\"idle in transaction\" %.2g", s.idle_in_transaction_age);
+					evbuffer_add_printf(evb, ",\"idle_in_transaction\" %.2g", s.idle_in_transaction_age);
 				else
-					evbuffer_add_printf(evb, ",\"idle in transaction\" %.ld", (long)s.idle_in_transaction_age);
+					evbuffer_add_printf(evb, ",\"idle_in_transaction\" %.ld", (long)s.idle_in_transaction_age);
 			} else if ((tmp = get_query(s)) != NULL)
 				evbuffer_add_printf(evb, ",\"query\":%s", tmp);
 			evbuffer_add_printf(evb, "}");
