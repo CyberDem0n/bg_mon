@@ -1081,7 +1081,8 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 					ps.idle_in_transaction_age = 0;
 				else
 					ps.idle_in_transaction_age = calculate_age(beentry->st_state_start_timestamp);
-			} else if (ps.state == STATE_RUNNING || ps.state == STATE_IDLEINTRANSACTION) {
+			} 
+			if (ps.state == STATE_RUNNING || ps.state == STATE_IDLEINTRANSACTION) {
 				if (ps.databaseid)
 					pg_stats->active_connections++;
 				if (ps.type != PG_WAL_SENDER) {
