@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/sysmacros.h>
 
 #include "postgres.h"
 
@@ -223,6 +224,31 @@ static char *resolve_dm_name(char *mapper_name)
 	return mapper_name;
 }
 
+static char *resolve_device_name(const char *path)
+{
+	static char ret[NAME_MAX];
+	struct stat info;
+
+	strcpy(ret, path + 5);  /* fallback */
+
+	if (stat(path, &info) == 0 && S_ISBLK(info.st_mode)) {
+		FILE *io = fopen("/proc/diskstats", "r");
+
+		if (io != NULL) {
+			int min, maj;
+			char buf[256], device_name[128];
+
+			while (fgets(buf, sizeof(buf), io))
+				if (sscanf(buf, "%u %u %s", &maj, &min, device_name) == 3
+						&& maj == major(info.st_rdev) && min == minor(info.st_rdev)) {
+					strcpy(ret, device_name);
+					break;
+				}
+		}
+	}
+	return ret;
+}
+
 static char *get_device(List *mounts, const char *path)
 {
 	ListCell *lc;
@@ -286,7 +312,7 @@ static char *get_device(List *mounts, const char *path)
 		return resolve_dm_name(best_match->me_devname + 12);
 
 	if (strncmp(best_match->me_devname, "/dev/", 5) == 0)
-		return best_match->me_devname + 5;
+		return resolve_device_name(best_match->me_devname);
 
 	return best_match->me_devname; 
 }
