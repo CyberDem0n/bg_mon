@@ -244,6 +244,7 @@ static char *resolve_device_name(const char *path)
 					strcpy(ret, device_name);
 					break;
 				}
+			fclose(io);
 		}
 	}
 	return ret;
