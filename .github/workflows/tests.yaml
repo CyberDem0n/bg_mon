@@ -8,7 +8,7 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     env:
       PG: ${{ matrix.postgres-version }}
     strategy:
@@ -39,7 +39,7 @@ jobs:
 
     - name: Download noisia
       run: |
-        VERSION=0.1.0
+        VERSION=0.1.1
         curl -sL https://github.com/lesovsky/noisia/releases/download/v$VERSION/noisia_${VERSION}_linux_amd64.tar.gz | tar xzv noisia
 
     - name: Compile and install bg_mon
