@@ -37,13 +37,6 @@ jobs:
         # forbid creation of a main cluster when package is installed
         sudo sed -ri 's/#(create_main_cluster) .*$/\1 = false/' /etc/postgresql-common/createcluster.conf
         sudo apt-get install -yq --no-install-suggests --no-install-recommends postgresql-$PG postgresql-server-dev-$PG
-        sudo lsblk
-        sudo ls -al /dev
-        sudo cat /proc/mounts
-        sudo cat /proc/diskstats
-        sudo ls -lR /sys/block
-        sudo df -h
-        sudo grep . /sys/fs/cgroup/*.* || true
 
     - name: Download noisia
       run: |
