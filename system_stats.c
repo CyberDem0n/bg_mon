@@ -7,6 +7,7 @@
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
 #define PROC_PRESSURE "/proc/pressure/"
 
+double SC_CLK_TCK;
 extern char *cpu_cgroup_mount;
 static char *cpu_cgroup = NULL;
 static int cpu_cgroup_len = 0;
@@ -168,7 +169,7 @@ static cgroup_memory read_cgroup_memory_stats(void)
 	FILE *csfd;
 	int i = 0, j = 0;
 	cgroup_memory cm = {0,};
-	char name[6], buf[255];
+	char name[26], buf[255];
 	unsigned long value, total_inactive_file = 0;
 	struct _mem_tab {
 		const char *name;

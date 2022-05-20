@@ -3,6 +3,7 @@
 #include <linux/sockios.h>
 #include <linux/types.h>
 #include <linux/ethtool.h>
+#include <netinet/in.h>
 
 #include "system_stats.h"
 #include "net_stats.h"
