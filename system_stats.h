@@ -3,7 +3,7 @@
 
 #include "postgres.h"
 
-double SC_CLK_TCK;
+extern double SC_CLK_TCK;
 
 #define MINIMUM(a,b)		((a) < (b) ? (a) : (b))
 #define MAXIMUM(a,b)		((a) > (b) ? (a) : (b))
