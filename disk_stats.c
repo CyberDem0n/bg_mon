@@ -45,6 +45,7 @@ static unsigned int du_counter;
 char *cpu_cgroup_mount = NULL;
 char *cpuacct_cgroup_mount = NULL;
 char *memory_cgroup_mount = NULL;
+char *cgroup2_mount = NULL;
 
 /******************************************************
  * implementation of du -s and du -sx functionality for
@@ -169,6 +170,8 @@ static List *read_mounts()
 					&& strcmp(me->mnt_type, "cgroup") == 0
 					&& hasmntopt(me, "memory"))
 				memory_cgroup_mount = pstrdup(me->mnt_dir);
+			if (cgroup2_mount == NULL && strcmp(me->mnt_type, "cgroup2") == 0)
+				cgroup2_mount = pstrdup(me->mnt_dir);
 		}
 		fclose(f);
 	}

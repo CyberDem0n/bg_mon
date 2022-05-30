@@ -5,7 +5,8 @@
 #include "system_stats.h"
 
 #define PROC_OVERCOMMIT "/proc/sys/vm/overcommit_"
-#define PROC_PRESSURE "/proc/pressure/"
+#define PROC_PRESSURE "/proc/pressure"
+#define PROC_PRESSURE_LEN (sizeof(PROC_PRESSURE) - 1)
 
 double SC_CLK_TCK;
 extern char *cpu_cgroup_mount;
@@ -19,6 +20,13 @@ static int cpuacct_cgroup_len = 0;
 extern char *memory_cgroup_mount;
 static char *memory_cgroup = NULL;
 static int memory_cgroup_len = 0;
+
+extern char *cgroup2_mount;
+static char *cgroup2 = NULL;
+static int cgroup2_len = 0;
+
+static char *pressure_loc = NULL;
+static int pressure_len = 0;
 
 static char *sysname = "Linux";
 static char *nodename = NULL;
@@ -60,7 +68,7 @@ static bool pressure_available()
 	struct stat sb;
 	int res;
 
-	res = stat("/proc/pressure", &sb);
+	res = stat(PROC_PRESSURE, &sb);
 	return (res != -1) && S_ISDIR(sb.st_mode);
 }
 
@@ -75,26 +83,34 @@ static bool pressure_available()
  *
  * The result returned via pressure array passed as the first argument.
  */
-static void read_pressure(pressure *result, pressure_res resource)
+static bool read_pressure(pressure *result, pressure_res resource, bool use_cgroup2)
 {
+	bool ret = false;
+	int pos;
 	FILE *f;
 
 	switch (resource)
 	{
 		case CPU:
-			f = fopen(PROC_PRESSURE "cpu", "r");
+			strcpy(pressure_loc + pressure_len, "cpu");
+			pos = 3;
 			break;
 		case MEMORY:
-			f = fopen(PROC_PRESSURE "memory", "r");
+			strcpy(pressure_loc + pressure_len, "memory");
+			pos = 6;
 			break;
 		case IO:
-			f = fopen(PROC_PRESSURE "io", "r");
+			strcpy(pressure_loc + pressure_len, "io");
+			pos = 2;
 			break;
 		default:
-			return;
+			return ret;
 	}
 
-	if (f != NULL) {
+	if (use_cgroup2)
+		strcpy(pressure_loc + pressure_len + pos, ".pressure");
+
+	if ((f = fopen(pressure_loc, "r")) != NULL) {
 		char type[PTYPE_SIZE];
 		pressure p = {0, };
 
@@ -116,10 +132,12 @@ static void read_pressure(pressure *result, pressure_res resource)
 				break;
 
 			result[i] = p;
+			ret = true;
 		}
 
 		fclose(f);
 	}
+	return ret;
 }
 
 static load_avg read_load_avg(void)
@@ -219,6 +237,94 @@ static cgroup_memory read_cgroup_memory_stats(void)
 	return cm;
 }
 
+static cgroup_memory read_cgroup2_memory_stats(void)
+{
+	FILE *csfd;
+	cgroup_memory cm = {0,};
+	char buf[255];
+
+	strcpy(cgroup2 + cgroup2_len, "memory.max");
+	if ((csfd = fopen(cgroup2, "r")) != NULL) {
+		if (fgets(buf, sizeof(buf), csfd)) {
+			if (strncmp(buf, "max", 3) == 0)
+				cm.limit = 0x1FFFFFFFFFFFFC, cm.available = true;
+			else {
+				cm.available = sscanf(buf, "%ld", &cm.limit) == 1;
+				cm.limit /= 1024;
+			}
+		}
+		fclose(csfd);
+	}
+
+	strcpy(cgroup2 + cgroup2_len, "memory.current");
+	cm.usage = read_ullong(cgroup2) / 1024;
+	if (cm.usage > 0) cm.available = true;
+
+	strcpy(cgroup2 + cgroup2_len, "memory.stat");
+	if ((csfd = fopen(cgroup2, "r")) != NULL) {
+		int i = 0, j;
+		unsigned long value, inactive_file;
+		char name[14];
+
+		struct _mem_tab {
+			const char *name;
+			unsigned long *value;
+		} mem_tab[] = {
+			{"anon", &cm.rss},
+			{"file", &cm.cache},
+			{"file_dirty", &cm.dirty},
+			{"inactive_file", &inactive_file},
+			{NULL, NULL}
+		};
+
+		while (i < lengthof(mem_tab) - 1
+				&& fgets(buf, sizeof(buf), csfd)
+				&& sscanf(buf, "%13s %lu", name, &value) == 2)
+			for (j = 0; mem_tab[j].name != NULL; ++j)
+				if (strcmp(mem_tab[j].name, name) == 0) {
+					++i;
+					*mem_tab[j].value = value / 1024;
+					cm.available = true;
+					break;
+				}
+
+		fclose(csfd);
+
+		cm.usage = MAXIMUM(cm.usage - inactive_file, 0);
+	}
+
+	strcpy(cgroup2 + cgroup2_len, "memory.events");
+	if ((csfd = fopen(cgroup2, "r")) != NULL) {
+		int i = 0, j;
+		unsigned long long value;
+		char name[9];
+
+		struct _oom_tab {
+			const char *name;
+			unsigned long *value;
+		} oom_tab[] = {
+			{"oom", &cm.failcnt},
+			{"oom_kill", &cm.oom_kill},
+			{NULL, NULL}
+		};
+
+		while (i < lengthof(oom_tab) - 1
+				&& fgets(buf, sizeof(buf), csfd)
+				&& sscanf(buf, "%8s %llu", name, &value) == 2)
+			for (j = 0; oom_tab[j].name != NULL; ++j)
+				if (strcmp(oom_tab[j].name, name) == 0) {
+					++i;
+					*oom_tab[j].value = value;
+					cm.available = true;
+					break;
+				}
+
+		fclose(csfd);
+	}
+
+	return cm;
+}
+
 static meminfo read_meminfo(void)
 {
 	FILE *mifd;
@@ -244,6 +350,8 @@ static meminfo read_meminfo(void)
 
 	if (memory_cgroup != NULL)
 		mi.cgroup = read_cgroup_memory_stats();
+	else if (cgroup2 != NULL)
+		mi.cgroup = read_cgroup2_memory_stats();
 
 	if ((mifd = fopen("/proc/meminfo", "r")) == NULL)
 		return mi;
@@ -273,6 +381,95 @@ static meminfo read_meminfo(void)
 	mi.cached += slab_reclaimable;
 	mi.overcommit = read_overcommit();
 	return mi;
+}
+
+static int count_cpus(char *filename)
+{
+	int count = 0;
+	FILE *csfd = fopen(filename, "r");
+
+	if (csfd != NULL) {
+		char *value, buf[1024];
+		value = buf;
+
+		/* expected format: "0,2,4-7" */
+		if (fgets(buf, sizeof(buf), csfd))
+			while (value && *value) {
+				char *comma = strchr(value, ',');
+				char *dash;
+				if (comma != NULL) *comma = '\0';
+				if ((dash = strchr(value, '-')) == NULL)
+					count++;
+				else {
+					int from, to;
+					*dash = '\0';
+					from = atoi(value);
+					to = atoi(dash + 1);
+					count += to - from + 1;
+				}
+				value = comma == NULL ? NULL : comma + 1;
+			}
+		fclose(csfd);
+	}
+
+	return count > 0 ? count : sysconf(_SC_NPROCESSORS_ONLN);
+}
+
+static cgroup_cpu read_cgroup2_cpu_stats(void)
+{
+	FILE *csfd;
+	char buf[255];
+	cgroup_cpu cc = {0,};
+
+	strcpy(cgroup2 + cgroup2_len, "cpu.max");
+	if ((csfd = fopen(cgroup2, "r")) != NULL) {
+		if (fgets(buf, sizeof(buf), csfd)) {
+			if (strncmp(buf, "max", 3) == 0)
+				cc.quota = -1, cc.available = true;
+			else
+				cc.available = sscanf(buf, "%lld %*u", &cc.quota) == 1;
+		}
+		fclose(csfd);
+	}
+
+	strcpy(cgroup2 + cgroup2_len, "cpu.weight");
+	cc.shares = read_ullong(cgroup2);
+	if (cc.shares > 0) cc.available = true;
+	cc.shares = ((int)((262142 * cc.shares - 1)/9999.0)) + 2;
+
+	strcpy(cgroup2 + cgroup2_len, "cpu.stat");
+	if ((csfd = fopen(cgroup2, "r")) != NULL) {
+		int i = 0, j;
+		unsigned long long value;
+		char name[12];
+
+		struct _cpu_tab {
+			const char *name;
+			unsigned long long *value;
+		} cpu_tab[] = {
+			{"usage_usec", &cc.total},
+			{"user_usec", &cc.user},
+			{"system_usec", &cc.system},
+			{NULL, NULL}
+		};
+
+		while (i < lengthof(cpu_tab) - 1
+				&& fgets(buf, sizeof(buf), csfd)
+				&& sscanf(buf, "%11s %llu", name, &value) == 2)
+			for (j = 0; cpu_tab[j].name != NULL; ++j)
+				if (strcmp(cpu_tab[j].name, name) == 0) {
+					++i;
+					*cpu_tab[j].value = value / 1000.0;
+					cc.available = true;
+					break;
+				}
+
+		fclose(csfd);
+	}
+
+	strcpy(cgroup2 + cgroup2_len, "cpuset.cpus.effective");
+	cc.online_cpus = count_cpus(cgroup2);
+	return cc;
 }
 
 static cgroup_cpu read_cgroup_cpu_stats(void)
@@ -373,6 +570,8 @@ static system_stat read_proc_stat(void)
 
 	if (cpu_cgroup != NULL || cpuacct_cgroup != NULL)
 		st.cpu.cgroup = read_cgroup_cpu_stats();
+	else if (cgroup2 != NULL)
+		st.cpu.cgroup = read_cgroup2_cpu_stats();
 	return st;
 }
 
@@ -433,13 +632,22 @@ system_stat get_system_stats(void)
 
 	if (pressure_available())
 	{
+		pressure_len = PROC_PRESSURE_LEN;
+		strcpy(pressure_loc, PROC_PRESSURE);
+		pressure_loc[pressure_len++] = '/';
 		system_stats.pressure = true;
-		read_pressure((pressure *) &system_stats.p_cpu, CPU);
-		read_pressure((pressure *) &system_stats.p_memory, MEMORY);
-		read_pressure((pressure *) &system_stats.p_io, IO);
+		read_pressure((pressure *) &system_stats.p_cpu, CPU, false);
+		read_pressure((pressure *) &system_stats.p_memory, MEMORY, false);
+		read_pressure((pressure *) &system_stats.p_io, IO, false);
 	}
-	else
-		system_stats.pressure = false;
+	else if (cgroup2 != NULL)
+	{
+		strcpy(pressure_loc, cgroup2);
+		pressure_len = cgroup2_len;
+		system_stats.pressure = read_pressure((pressure *) &system_stats.p_cpu, CPU, true);
+		system_stats.pressure |= read_pressure((pressure *) &system_stats.p_memory, MEMORY, true);
+		system_stats.pressure |= read_pressure((pressure *) &system_stats.p_io, IO, true);
+	}
 
 	system_stats.mem = read_meminfo();
 	system_stats.sysname = sysname;
@@ -479,4 +687,15 @@ void system_stats_init(void)
 		strcpy(memory_cgroup + memory_cgroup_len, prefix);
 		memory_cgroup_len += sizeof(prefix) - 1;
 	}
+
+	if (cgroup2_mount != NULL) {
+		const char prefix[] = "/";
+		cgroup2_len = strlen(cgroup2_mount);
+		cgroup2 = repalloc(cgroup2_mount, cgroup2_len + 23); /* strlen("/cpuset.cpus.effective") + 1 */
+		strcpy(cgroup2 + cgroup2_len, prefix);
+		cgroup2_len += sizeof(prefix) - 1;
+	}
+
+	if (pressure_available() || cgroup2)
+		pressure_loc = palloc(MAXIMUM(PROC_PRESSURE_LEN, cgroup2_len) + 16); /* strlen("memory.pressure") + 1 */
 }
