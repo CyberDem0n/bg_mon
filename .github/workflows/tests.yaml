@@ -8,23 +8,33 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
     env:
       PG: ${{ matrix.postgres-version }}
     strategy:
       fail-fast: false
       matrix:
-        postgres-version:
-        - '9.3'
-        - '9.4'
-        - '9.5'
-        - '9.6'
-        - '10'
-        - '11'
-        - '12'
-        - '13'
-        - '14'
-        - '15'
+        include:
+        - postgres-version: '9.3'
+          os: ubuntu-22.04
+        - postgres-version: '9.4'
+          os: ubuntu-18.04
+        - postgres-version: '9.5'
+          os: ubuntu-20.04
+        - postgres-version: '9.6'
+          os: ubuntu-22.04
+        - postgres-version: '10'
+          os: ubuntu-18.04
+        - postgres-version: '11'
+          os: ubuntu-20.04
+        - postgres-version: '12'
+          os: ubuntu-22.04
+        - postgres-version: '13'
+          os: ubuntu-18.04
+        - postgres-version: '14'
+          os: ubuntu-20.04
+        - postgres-version: '15'
+          os: ubuntu-22.04
 
     steps:
     - uses: actions/checkout@v1

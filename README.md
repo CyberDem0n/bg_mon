@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/CyberDem0n/bg_mon.svg?branch=master)](https://travis-ci.org/CyberDem0n/bg_mon) [![Coverage Status](https://coveralls.io/repos/github/CyberDem0n/bg_mon/badge.svg?branch=master)](https://coveralls.io/github/CyberDem0n/bg_mon?branch=master)
+[![Build Status](https://github.com/CyberDem0n/bg_mon/actions/workflows/tests.yaml/badge.svg)](https://github.com/CyberDem0n/bg_mon/actions/workflows/tests.yaml) [![Coverage Status](https://coveralls.io/repos/github/CyberDem0n/bg_mon/badge.svg?branch=master)](https://coveralls.io/github/CyberDem0n/bg_mon?branch=master)
 
 Background worker for monitoring PostgreSQL
 ===========================================
