@@ -9,6 +9,9 @@
 #include "access/heapam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#if PG_VERSION_NUM >= 150000
+#include "access/xlogrecovery.h"
+#endif
 #include "executor/spi.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_database.h"
@@ -992,8 +995,10 @@ static PgBackendType map_backend_type(BackendType type)
 			return PG_UNKNOWN;
 		case B_ARCHIVER:
 			return PG_ARCHIVER;
+#if PG_VERSION_NUM < 150000
 		case B_STATS_COLLECTOR:
 			return PG_STATS_COLLECTOR;
+#endif
 		case B_LOGGER:
 			return PG_LOGGER;
 #endif
