@@ -76,7 +76,7 @@ typedef struct disk_stat {
 } disk_stat;
 
 typedef struct {
-	disk_stat values[2];
+	disk_stat values[3];
 	device_stats dstats;
 } disk_stats;
 

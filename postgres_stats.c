@@ -12,7 +12,6 @@
 #if PG_VERSION_NUM >= 150000
 #include "access/xlogrecovery.h"
 #endif
-#include "executor/spi.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_type.h"
