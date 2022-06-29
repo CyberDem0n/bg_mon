@@ -644,7 +644,7 @@ void disk_stats_init(void)
 	wal_directory = palloc(datadir_len + sizeof(XLOGDIR) + 2);
 	join_path_components(wal_directory, DataDir, XLOGDIR);
 
-	log_directory = palloc(datadir_len + sizeof(Log_directory));
+	log_directory = palloc(datadir_len + strlen(Log_directory) + 2);
 	if (!is_absolute_path(Log_directory))
 		join_path_components(log_directory, DataDir, Log_directory);
 	else strcpy(log_directory, Log_directory);
