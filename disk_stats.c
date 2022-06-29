@@ -594,6 +594,7 @@ disk_stats get_disk_stats(void)
 
 		if (log_dev) {
 			if (log_dev == data_dev) disk_stats[LOGS].device_id = disk_stats[DATA].device_id;
+			else if (log_dev == wal_dev) disk_stats[LOGS].device_id = disk_stats[WAL].device_id;
 			else disk_stats[LOGS].device_id = find_or_add_device(&ret.dstats, log_dev);
 		}
 	}
@@ -617,6 +618,9 @@ disk_stats get_disk_stats(void)
 	if (data_dev == log_dev) {
 		disk_stats[LOGS].size = disk_stats[DATA].size;
 		disk_stats[LOGS].free = disk_stats[DATA].free;
+	} else if (wal_dev == log_dev) {
+		disk_stats[LOGS].size = disk_stats[WAL].size;
+		disk_stats[LOGS].free = disk_stats[WAL].free;
 	} else if (statvfs(log_directory, &st) == 0) {
 		disk_stats[LOGS].size = st.f_blocks * st.f_bsize / 1024;
 		disk_stats[LOGS].free = st.f_bavail * st.f_bsize / 1024;
@@ -658,6 +662,8 @@ void disk_stats_init(void)
 	if (log_dev) {
 		if (data_dev && strcmp(data_dev, log_dev) == 0)
 			log_dev = data_dev;
+		else if (wal_dev && strcmp(wal_dev, log_dev) == 0)
+			log_dev = wal_dev;
 		else log_dev = pstrdup(log_dev);
 	}
 
