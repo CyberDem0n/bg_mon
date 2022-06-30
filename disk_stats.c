@@ -108,7 +108,7 @@ static void *du_thread(void *arg)
 		tmp_data_du = du(AT_FDCWD, DataDir, 0, &tmp_wal_du);
 		tmp_log_du = du(AT_FDCWD, log_directory, 0, NULL);
 
-		/* log_directory is a subdirectory of DataDir */
+		// log_directory is a subdirectory of DataDir
 		if (path_is_prefix_of_path(DataDir, log_directory))
 			tmp_data_du -= tmp_log_du;
 		pthread_mutex_lock(&du_lock);
