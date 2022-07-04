@@ -12,12 +12,14 @@
 
 #include "tcop/utility.h"
 #include "access/xlog_internal.h"
+#include "postmaster/syslogger.h"
 
 #include "system_stats.h"
 #include "disk_stats.h"
 
 const int DATA = 0;
 const int WAL = 1;
+const int LOGS = 2;
 
 extern system_stat system_stats_old;
 
@@ -31,15 +33,17 @@ typedef struct {
 
 extern char *DataDir;
 static char *wal_directory;
+static char *log_directory;
 static char *data_dev;
 static char *wal_dev;
+static char *log_dev;
 
 static disk_stats disk_stats_old = {0,};
 static disk_stats disk_stats_next = {0,};
 static pthread_mutex_t du_lock;
 static pthread_cond_t du_cond;
 static bool run_du;
-static unsigned long long data_du, wal_du;
+static unsigned long long data_du, wal_du, log_du;
 static unsigned int du_counter;
 
 char *cpu_cgroup_mount = NULL;
@@ -99,12 +103,18 @@ static unsigned long long du(int dirfd, const char *path, dev_t dev, unsigned lo
 
 static void *du_thread(void *arg)
 {
-	unsigned long long tmp_data_du, tmp_wal_du;
+	unsigned long long tmp_data_du, tmp_wal_du, tmp_log_du;
 	while (true) {
 		tmp_data_du = du(AT_FDCWD, DataDir, 0, &tmp_wal_du);
+		tmp_log_du = du(AT_FDCWD, log_directory, 0, NULL);
+
+		// log_directory is a subdirectory of DataDir
+		if (path_is_prefix_of_path(DataDir, log_directory))
+			tmp_data_du -= tmp_log_du;
 		pthread_mutex_lock(&du_lock);
 		data_du = tmp_data_du;
 		wal_du = tmp_wal_du;
+		log_du = tmp_log_du;
 		while (!run_du)
 			pthread_cond_wait(&du_cond, &du_lock);
 		run_du = false;
@@ -561,10 +571,14 @@ disk_stats get_disk_stats(void)
 	disk_stats[WAL].type = "wal";
 	disk_stats[WAL].directory = wal_directory;
 
+	disk_stats[LOGS].type = "log";
+	disk_stats[LOGS].directory = log_directory;
+
 	du_counter = (du_counter + 1) % 30;
 	pthread_mutex_lock(&du_lock);
 	disk_stats[DATA].du = data_du;
 	disk_stats[WAL].du = wal_du;
+	disk_stats[LOGS].du = log_du;
 	if (du_counter == 0)
 		run_du = true;
 	pthread_mutex_unlock(&du_lock);
@@ -576,6 +590,12 @@ disk_stats get_disk_stats(void)
 		if (wal_dev) {
 			if (wal_dev == data_dev) disk_stats[WAL].device_id = disk_stats[DATA].device_id;
 			else disk_stats[WAL].device_id = find_or_add_device(&ret.dstats, wal_dev);
+		}
+
+		if (log_dev) {
+			if (log_dev == data_dev) disk_stats[LOGS].device_id = disk_stats[DATA].device_id;
+			else if (log_dev == wal_dev) disk_stats[LOGS].device_id = disk_stats[WAL].device_id;
+			else disk_stats[LOGS].device_id = find_or_add_device(&ret.dstats, log_dev);
 		}
 	}
 
@@ -594,6 +614,17 @@ disk_stats get_disk_stats(void)
 		disk_stats[WAL].size = st.f_blocks * st.f_bsize / 1024;
 		disk_stats[WAL].free = st.f_bavail * st.f_bsize / 1024;
 	}
+	
+	if (data_dev == log_dev) {
+		disk_stats[LOGS].size = disk_stats[DATA].size;
+		disk_stats[LOGS].free = disk_stats[DATA].free;
+	} else if (wal_dev == log_dev) {
+		disk_stats[LOGS].size = disk_stats[WAL].size;
+		disk_stats[LOGS].free = disk_stats[WAL].free;
+	} else if (statvfs(log_directory, &st) == 0) {
+		disk_stats[LOGS].size = st.f_blocks * st.f_bsize / 1024;
+		disk_stats[LOGS].free = st.f_bavail * st.f_bsize / 1024;
+	}
 
 	read_io_stats(&ret.dstats);
 	
@@ -608,12 +639,16 @@ void disk_stats_init(void)
 {
 	pthread_t thread;
 	List *mounts = read_mounts();
-	size_t len = strlen(DataDir);
-	wal_directory = palloc(len + sizeof(XLOGDIR) + 2);
-	strcpy(wal_directory, DataDir);
-	if (wal_directory[len - 1] != '/')
-		wal_directory[len++] = '/';
-	strcpy(wal_directory + len, XLOGDIR);
+	size_t datadir_len = strlen(DataDir);
+
+	wal_directory = palloc(datadir_len + sizeof(XLOGDIR) + 2);
+	join_path_components(wal_directory, DataDir, XLOGDIR);
+
+	log_directory = palloc(datadir_len + strlen(Log_directory) + 2);
+	if (!is_absolute_path(Log_directory))
+		join_path_components(log_directory, DataDir, Log_directory);
+	else strcpy(log_directory, Log_directory);
+	canonicalize_path(log_directory);
 
 	data_dev = get_device(mounts, DataDir);
 	if (data_dev) data_dev = pstrdup(data_dev);
@@ -622,6 +657,14 @@ void disk_stats_init(void)
 		if (data_dev && strcmp(data_dev, wal_dev) == 0)
 			wal_dev = data_dev;
 		else wal_dev = pstrdup(wal_dev);
+	}
+	log_dev = get_device(mounts, log_directory);
+	if (log_dev) {
+		if (data_dev && strcmp(data_dev, log_dev) == 0)
+			log_dev = data_dev;
+		else if (wal_dev && strcmp(wal_dev, log_dev) == 0)
+			log_dev = wal_dev;
+		else log_dev = pstrdup(log_dev);
 	}
 
 	free_mounts(mounts);
@@ -639,6 +682,7 @@ void disk_stats_init(void)
 	du_counter = 0;
 	data_du = 0;
 	wal_du = 0;
+	log_du = 0;
 	pthread_mutex_init(&du_lock, NULL);
 	pthread_cond_init(&du_cond, NULL);
 	pthread_create(&thread, NULL, du_thread, NULL);
