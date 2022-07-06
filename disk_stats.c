@@ -639,21 +639,21 @@ disk_stats get_disk_stats(void)
 void disk_stats_init(void)
 {
 	pthread_t thread;
-	char tmp_path[MAXPGPATH];
 	List *mounts = read_mounts();
 	size_t datadir_len = strlen(DataDir);
+
+	char buf[PATH_MAX];
+	char tmp_path[MAXPGPATH];
 
 	// we assume wal_directory is always inside DataDir
 	wal_directory = palloc(datadir_len + sizeof(XLOGDIR) + 2);
 	join_path_components(wal_directory, DataDir, XLOGDIR);
 
 	// log_directory can be either inside or outside DataDir
-	log_directory = palloc(datadir_len + strlen(Log_directory) + 2);
 	if (!is_absolute_path(Log_directory))
 		join_path_components(tmp_path, DataDir, Log_directory);
 	else strcpy(tmp_path, Log_directory);
-	if (!realpath(tmp_path, log_directory))
-		strcpy(log_directory, tmp_path);
+	log_directory = realpath(tmp_path, buf) ? pstrdup(buf) : pstrdup(tmp_path);
 
 	data_dev = get_device(mounts, DataDir);
 	if (data_dev) data_dev = pstrdup(data_dev);
