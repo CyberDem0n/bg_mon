@@ -640,13 +640,12 @@ void disk_stats_init(void)
 {
 	pthread_t thread;
 	List *mounts = read_mounts();
-	size_t datadir_len = strlen(DataDir);
 
 	char buf[PATH_MAX];
 	char tmp_path[MAXPGPATH];
 
 	// we assume wal_directory is always inside DataDir
-	wal_directory = palloc(datadir_len + sizeof(XLOGDIR) + 2);
+	wal_directory = palloc(strlen(DataDir) + sizeof(XLOGDIR) + 2);
 	join_path_components(wal_directory, DataDir, XLOGDIR);
 
 	// log_directory can be either inside or outside DataDir
