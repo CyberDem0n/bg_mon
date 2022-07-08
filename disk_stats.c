@@ -111,6 +111,7 @@ static void *du_thread(void *arg)
 		// log_directory is a subdirectory of DataDir
 		if (path_is_prefix_of_path(DataDir, log_directory))
 			tmp_data_du -= tmp_log_du;
+
 		pthread_mutex_lock(&du_lock);
 		data_du = tmp_data_du;
 		wal_du = tmp_wal_du;
@@ -639,16 +640,19 @@ void disk_stats_init(void)
 {
 	pthread_t thread;
 	List *mounts = read_mounts();
-	size_t datadir_len = strlen(DataDir);
 
-	wal_directory = palloc(datadir_len + sizeof(XLOGDIR) + 2);
+	char buf[PATH_MAX];
+	char tmp_path[MAXPGPATH];
+
+	// we assume wal_directory is always inside DataDir
+	wal_directory = palloc(strlen(DataDir) + sizeof(XLOGDIR) + 2);
 	join_path_components(wal_directory, DataDir, XLOGDIR);
 
-	log_directory = palloc(datadir_len + strlen(Log_directory) + 2);
+	// log_directory can be either inside or outside DataDir
 	if (!is_absolute_path(Log_directory))
-		join_path_components(log_directory, DataDir, Log_directory);
-	else strcpy(log_directory, Log_directory);
-	canonicalize_path(log_directory);
+		join_path_components(tmp_path, DataDir, Log_directory);
+	else strcpy(tmp_path, Log_directory);
+	log_directory = realpath(tmp_path, buf) ? pstrdup(buf) : pstrdup(tmp_path);
 
 	data_dev = get_device(mounts, DataDir);
 	if (data_dev) data_dev = pstrdup(data_dev);
