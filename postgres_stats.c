@@ -1127,7 +1127,9 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 
 	if (init_postgres)
 	{
-#if PG_VERSION_NUM >= 110000
+#if PG_VERSION_NUM >= 150000
+		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, false, NULL, false);
+#elif PG_VERSION_NUM >= 110000
 		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, NULL, false);
 #elif PG_VERSION_NUM >= 90500
 		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, NULL);
