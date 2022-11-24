@@ -793,6 +793,9 @@ restart:
 					   naptime);
 #endif
 		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+
 		/* emergency bailout if postmaster has died */
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
