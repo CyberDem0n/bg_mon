@@ -113,6 +113,18 @@ function clone_cluster() {
 
 create_cluster 0
 
+if [[ $version -ge 13 ]]; then
+    # PROCSIG_BARRIER handling test
+    psql -h localhost -p $port -d postgres -c "CREATE DATABASE test"
+    sleep 1
+    psql -h localhost -p $port -d test -c "SELECT pg_sleep(10)" &
+    procsig_pid=($!)
+    sleep 1
+    psql -h localhost -p $port -d postgres -c "DROP DATABASE test WITH (FORCE)"
+    sleep 1
+    ps -p $procsig_pid && exit 1
+fi
+
 run_sql_bg "create table foo(id int not null primary key); INSERT INTO foo values(1); BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; SELECT * FROM foo WHERE id = 1; select pg_advisory_lock(1), pg_sleep(30);"
 sleep 1
 run_sql_bg "select pg_advisory_lock(1), pg_sleep(5)"
