@@ -2,6 +2,9 @@
 #define _SAFETY_FUNCS_H_
 
 #include "postgres.h"
+#if PG_VERSION_NUM >= 160000
+#define PG_FUNCNAME_MACRO __func__
+#endif
 
 #define exit_with_error(...) \
 	do { \

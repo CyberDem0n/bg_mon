@@ -777,6 +777,12 @@ static void merge_stats(pg_stat_activity_list *pg_stats, proc_stat_list proc_sta
 #endif
 #define AUX_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE_PATTERN(TYPE) SUFFIX_PATTERN, TYPE)
 
+#if PG_VERSION_NUM >= 160000
+    #define DBENTRY_FIELD(DBENTRY, FIELD) DBENTRY->FIELD
+#else
+    #define DBENTRY_FIELD(DBENTRY, FIELD) DBENTRY->n_##FIELD
+#endif
+
 static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 {
 	PgBackendType type = PG_UNDEFINED;
@@ -1001,6 +1007,10 @@ static PgBackendType map_backend_type(BackendType type)
 		case B_LOGGER:
 			return PG_LOGGER;
 #endif
+#if PG_VERSION_NUM >= 160000
+		case B_STANDALONE_BACKEND:
+			return PG_STANDALONE_BACKEND;
+#endif
 		case B_BG_WORKER:
 		default:
 			return PG_UNDEFINED;
@@ -1211,29 +1221,34 @@ static void get_database_stats(db_stat_list *db, MemoryContext resultcxt)
 			ds.databaseid = oid;
 			ds.datname = json_escape_string(NameStr(pgdatabase->datname));
 
-			ds.n_xact_commit = (int64) (dbentry->n_xact_commit);
-			ds.n_xact_rollback = (int64) (dbentry->n_xact_rollback);
-			ds.n_blocks_fetched = (int64) (dbentry->n_blocks_fetched);
-			ds.n_blocks_hit = (int64) (dbentry->n_blocks_hit);
-			ds.n_tuples_returned = (int64) (dbentry->n_tuples_returned);
-			ds.n_tuples_fetched = (int64) (dbentry->n_tuples_fetched);
-			ds.n_tuples_inserted = (int64) (dbentry->n_tuples_inserted);
-			ds.n_tuples_updated = (int64) (dbentry->n_tuples_updated);
-			ds.n_tuples_deleted = (int64) (dbentry->n_tuples_deleted);
-			ds.n_conflict_tablespace = (int64) (dbentry->n_conflict_tablespace);
-			ds.n_conflict_lock = (int64) (dbentry->n_conflict_lock);
-			ds.n_conflict_snapshot = (int64) (dbentry->n_conflict_snapshot);
-			ds.n_conflict_bufferpin = (int64) (dbentry->n_conflict_bufferpin);
-			ds.n_conflict_startup_deadlock = (int64) (dbentry->n_conflict_startup_deadlock);
-			ds.n_temp_files = (int64) (dbentry->n_temp_files);
-			ds.n_temp_bytes = (int64) (dbentry->n_temp_bytes);
-			ds.n_deadlocks = (int64) (dbentry->n_deadlocks);
+			ds.n_xact_commit = (int64) DBENTRY_FIELD(dbentry, xact_commit);
+			ds.n_xact_rollback = (int64) DBENTRY_FIELD(dbentry, xact_rollback);
+			ds.n_blocks_fetched = (int64) DBENTRY_FIELD(dbentry, blocks_fetched);
+			ds.n_blocks_hit = (int64) DBENTRY_FIELD(dbentry, blocks_hit);
+			ds.n_tuples_returned = (int64) DBENTRY_FIELD(dbentry, tuples_returned);
+			ds.n_tuples_fetched = (int64) DBENTRY_FIELD(dbentry, tuples_fetched);
+			ds.n_tuples_inserted = (int64) DBENTRY_FIELD(dbentry, tuples_inserted);
+			ds.n_tuples_updated = (int64) DBENTRY_FIELD(dbentry, tuples_updated);
+			ds.n_tuples_deleted = (int64) DBENTRY_FIELD(dbentry, tuples_deleted);
+			ds.n_conflict_tablespace = (int64) DBENTRY_FIELD(dbentry, conflict_tablespace);
+			ds.n_conflict_lock = (int64) DBENTRY_FIELD(dbentry, conflict_lock);
+			ds.n_conflict_snapshot = (int64) DBENTRY_FIELD(dbentry, conflict_snapshot);
+			ds.n_conflict_bufferpin = (int64) DBENTRY_FIELD(dbentry, conflict_bufferpin);
+			ds.n_conflict_startup_deadlock = (int64) DBENTRY_FIELD(dbentry, conflict_startup_deadlock);
+			ds.n_temp_files = (int64) DBENTRY_FIELD(dbentry, temp_files);
+			ds.n_temp_bytes = (int64) DBENTRY_FIELD(dbentry, temp_bytes);
+			ds.n_deadlocks = (int64) DBENTRY_FIELD(dbentry, deadlocks);
 #if PG_VERSION_NUM >= 120000
-			ds.n_checksum_failures = (int64) (dbentry->n_checksum_failures);
+			ds.n_checksum_failures = (int64) DBENTRY_FIELD(dbentry, checksum_failures);
 			ds.last_checksum_failure = (int64) (dbentry->last_checksum_failure);
 #endif
-			ds.n_block_read_time = (int64) (dbentry->n_block_read_time); /* times in microseconds */
-			ds.n_block_write_time = (int64) (dbentry->n_block_write_time);
+#if PG_VERSION_NUM >= 160000
+			ds.n_block_read_time = (int64) dbentry->blk_read_time; /* times in microseconds */
+			ds.n_block_write_time = (int64) dbentry->blk_write_time;
+#else
+			ds.n_block_read_time = (int64) dbentry->n_block_read_time; /* times in microseconds */
+			ds.n_block_write_time = (int64) dbentry->n_block_write_time;
+#endif
 
 			db_stat_list_add(db, ds);
 
