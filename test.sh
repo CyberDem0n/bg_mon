@@ -113,7 +113,7 @@ function clone_cluster() {
 
 create_cluster 0
 
-if [[ $version -ge 13 ]]; then
+if [[ ${version%.*} -ge 13 ]]; then
     # PROCSIG_BARRIER handling test
     psql -h localhost -p $port -d postgres -c "CREATE DATABASE test"
     sleep 1

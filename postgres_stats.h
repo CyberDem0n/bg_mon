@@ -18,6 +18,7 @@ typedef enum PgBackendType
 	PG_ARCHIVER,
 	PG_STATS_COLLECTOR,
 	PG_LOGGER,
+	PG_STANDALONE_BACKEND,
 	PG_PARALLEL_WORKER,
 	PG_LOGICAL_LAUNCHER,
 	PG_LOGICAL_WORKER
@@ -27,6 +28,7 @@ typedef enum PgBackendType
 #define AUTOVAC_LAUNCHER_PROC_NAME "autovacuum launcher"
 #define AUTOVAC_WORKER_PROC_NAME "autovacuum worker"
 #define BACKEND_PROC_NAME "backend"
+#define STANDALONE_BACKEND_PROC_NAME "standalone backend"
 #define BG_WRITER_NAME "bgwriter"
 #define CHECKPOINTER_PROC_NAME "checkpointer"
 #define STARTUP_PROC_NAME "startup"

@@ -35,7 +35,7 @@
 PG_MODULE_MAGIC;
 
 void _PG_init(void);
-void bg_mon_main(Datum);
+PGDLLEXPORT void bg_mon_main(Datum);
 
 extern TimestampTz PgStartTime;
 pg_time_t pg_start_time;
@@ -101,6 +101,9 @@ static time_t parse_timestamp(const char *uri)
 
 		size_t size_out;
 		char *decoded = evhttp_uridecode(uri, 1, &size_out);
+#if PG_VERSION_NUM >= 160000
+		DateTimeErrorExtra extra;
+#endif
 
 		if (decoded == NULL)
 			return ret;
@@ -112,7 +115,11 @@ static time_t parse_timestamp(const char *uri)
 		if (timestamp2tm(current_timestamp, NULL, &tm, &fsec, NULL, NULL) != 0)
 			goto err;
 
-		if (DecodeDateTime(field, ftype, nf, &dtype, &tm, &fsec, &tz) < 0)
+		if (DecodeDateTime(field, ftype, nf, &dtype, &tm, &fsec, &tz
+#if PG_VERSION_NUM >= 160000
+						  , &extra
+#endif
+					) < 0)
 			goto err;
 
 		if (dtype != DTK_DATE && dtype != DTK_TIME)
@@ -311,6 +318,7 @@ static const char *process_type(pg_stat_activity p)
 		QUOTE(ARCHIVER_PROC_NAME),
 		QUOTE(STATS_COLLECTOR_PROC_NAME),
 		QUOTE(LOGGER_PROC_NAME),
+		QUOTE(STANDALONE_BACKEND_PROC_NAME),
 		QUOTE(PARALLEL_WORKER_NAME),
 		QUOTE(LOGICAL_LAUNCHER_NAME),
 		QUOTE(LOGICAL_WORKER_NAME)
