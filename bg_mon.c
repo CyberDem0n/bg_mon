@@ -718,7 +718,9 @@ bg_mon_main(Datum main_arg)
 	/* Establish signal handlers before unblocking signals. */
 	pqsignal(SIGHUP, bg_mon_sighup);
 	pqsignal(SIGTERM, bg_mon_sigterm);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler); // as we don't set BGWORKER_BACKEND_DATABASE_CONNECTION
+	/* Explicitly set, as we don't define BGWORKER_BACKEND_DATABASE_CONNECTION flag */
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGFPE, FloatExceptionHandler);
 
 	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
 		proc_exit(1);
