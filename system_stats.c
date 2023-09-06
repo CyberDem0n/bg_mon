@@ -210,8 +210,9 @@ static cgroup_memory read_cgroup_memory_stats(void)
 		return cm;
 
 	while (i < lengthof(mem_tab) - 1
-			&& fgets(buf, sizeof(buf), csfd)
-			&& sscanf(buf, "%25s %lu", name, &value) == 2) {
+			&& fgets(buf, sizeof(buf), csfd)) {
+		if (sscanf(buf, "%25s %lu", name, &value) != 2)
+			continue;
 		for (j = 0; mem_tab[j].name != NULL; ++j) {
 			if (strcmp(mem_tab[j].name, name) == 0) {
 				++i;
@@ -278,8 +279,9 @@ static cgroup_memory read_cgroup2_memory_stats(void)
 		};
 
 		while (i < lengthof(mem_tab) - 1
-				&& fgets(buf, sizeof(buf), csfd)
-				&& sscanf(buf, "%13s %lu", name, &value) == 2)
+				&& fgets(buf, sizeof(buf), csfd)) {
+			if (sscanf(buf, "%13s %lu", name, &value) != 2)
+				continue;
 			for (j = 0; mem_tab[j].name != NULL; ++j)
 				if (strcmp(mem_tab[j].name, name) == 0) {
 					++i;
@@ -287,7 +289,7 @@ static cgroup_memory read_cgroup2_memory_stats(void)
 					cm.available = true;
 					break;
 				}
-
+		}
 		fclose(csfd);
 
 		cm.usage = MAXIMUM(cm.usage - inactive_file, 0);
@@ -309,8 +311,9 @@ static cgroup_memory read_cgroup2_memory_stats(void)
 		};
 
 		while (i < lengthof(oom_tab) - 1
-				&& fgets(buf, sizeof(buf), csfd)
-				&& sscanf(buf, "%8s %llu", name, &value) == 2)
+				&& fgets(buf, sizeof(buf), csfd)) {
+			if (sscanf(buf, "%8s %llu", name, &value) != 2)
+				continue;
 			for (j = 0; oom_tab[j].name != NULL; ++j)
 				if (strcmp(oom_tab[j].name, name) == 0) {
 					++i;
@@ -318,7 +321,7 @@ static cgroup_memory read_cgroup2_memory_stats(void)
 					cm.available = true;
 					break;
 				}
-
+		}
 		fclose(csfd);
 	}
 
@@ -454,8 +457,9 @@ static cgroup_cpu read_cgroup2_cpu_stats(void)
 		};
 
 		while (i < lengthof(cpu_tab) - 1
-				&& fgets(buf, sizeof(buf), csfd)
-				&& sscanf(buf, "%11s %llu", name, &value) == 2)
+				&& fgets(buf, sizeof(buf), csfd)) {
+			if (sscanf(buf, "%11s %llu", name, &value) != 2)
+				continue;
 			for (j = 0; cpu_tab[j].name != NULL; ++j)
 				if (strcmp(cpu_tab[j].name, name) == 0) {
 					++i;
@@ -463,7 +467,7 @@ static cgroup_cpu read_cgroup2_cpu_stats(void)
 					cc.available = true;
 					break;
 				}
-
+		}
 		fclose(csfd);
 	}
 
@@ -519,15 +523,16 @@ static cgroup_cpu read_cgroup_cpu_stats(void)
 			return cc;
 
 		while (i < lengthof(cpu_tab) -1
-				&& fgets(buf, sizeof(buf), csfd)
-				&& sscanf(buf, "%6s %llu", name, &value) == 2)
+				&& fgets(buf, sizeof(buf), csfd)) {
+			if (sscanf(buf, "%6s %llu", name, &value) != 2)
+				continue;
 			for (j = 0; cpu_tab[j].name != NULL; ++j)
 				if (strcmp(cpu_tab[j].name, name) == 0) {
 					++i;
 					*cpu_tab[j].value = value;
 					break;
 				}
-
+		}
 		fclose(csfd);
 	}
 
