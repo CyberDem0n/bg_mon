@@ -1043,7 +1043,11 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 
 	for (i = 1; i <= num_backends; ++i)
 	{
+#if PG_VERSION_NUM >= 160000
+		PgBackendStatus *beentry = pgstat_get_local_beentry_by_index(i);
+#else
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
+#endif
 		if (beentry && beentry->st_procpid != MyProcPid)
 		{
 			pg_stat_activity ps = {beentry->st_procpid, 0,};
