@@ -1044,7 +1044,7 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 	for (i = 1; i <= num_backends; ++i)
 	{
 #if PG_VERSION_NUM >= 160000
-		PgBackendStatus *beentry = pgstat_get_local_beentry_by_index(i);
+		PgBackendStatus *beentry = &pgstat_get_local_beentry_by_index(i)->backendStatus;
 #else
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
 #endif
