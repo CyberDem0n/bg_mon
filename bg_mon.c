@@ -188,29 +188,27 @@ static bool check_bucket_time(struct aggregated_stats *agg, time_t tm)
 
 static bool send_aggregated_data(struct evhttp_request *req, struct aggregated_stats *agg, time_t tm)
 {
-	bool ret = false;
-	struct evbuffer *evb;
+	struct evbuffer *evb = NULL;
 
 	pthread_mutex_lock(&agg_lock);
-	if ((ret = agg != NULL)) {
-		if (check_bucket_time(agg, tm)) {
-			if (!agg->state.is_flushed && !agg->state.is_finished)
-				brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
+	if (agg != NULL && check_bucket_time(agg, tm)) {
+		if (!agg->state.is_flushed && !agg->state.is_finished)
+			brotli_compress_data(&agg->state, NULL, 0, BROTLI_OPERATION_FLUSH);
 
-			evb = evbuffer_new();
-			evbuffer_add(evb, agg->state.to, agg->state.pos);
-		} else ret = false;
+		evb = evbuffer_new();
+		evbuffer_add(evb, agg->state.to, agg->state.pos);
 	}
 	pthread_mutex_unlock(&agg_lock);
 
-	if (ret) {
+	if (evb != NULL) {
 		struct evkeyvalq *output_headers = evhttp_request_get_output_headers(req);
 		evhttp_add_header(output_headers, "Content-Type", "application/json");
 		evhttp_add_header(output_headers, "Content-Encoding", "br");
 		evhttp_send_reply(req, 200, "OK", evb);
 		evbuffer_free(evb);
+		return true;
 	}
-	return ret;
+	return false;
 }
 #endif
 
