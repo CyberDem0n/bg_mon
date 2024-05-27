@@ -16,30 +16,32 @@ jobs:
       matrix:
         include:
         - postgres-version: '9.3'
-          os: ubuntu-22.04
-        - postgres-version: '9.4'
           os: ubuntu-20.04
-        - postgres-version: '9.5'
+        - postgres-version: '9.4'
           os: ubuntu-22.04
+        - postgres-version: '9.5'
+          os: ubuntu-24.04
         - postgres-version: '9.6'
           os: ubuntu-20.04
         - postgres-version: '10'
           os: ubuntu-22.04
         - postgres-version: '11'
-          os: ubuntu-20.04
+          os: ubuntu-24.04
         - postgres-version: '12'
-          os: ubuntu-22.04
-        - postgres-version: '13'
           os: ubuntu-20.04
-        - postgres-version: '14'
+        - postgres-version: '13'
           os: ubuntu-22.04
+        - postgres-version: '14'
+          os: ubuntu-24.04
         - postgres-version: '15'
           os: ubuntu-20.04
         - postgres-version: '16'
           os: ubuntu-22.04
+        - postgres-version: '17'
+          os: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up packages
       run: |
         set -e
