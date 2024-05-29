@@ -21,7 +21,9 @@ typedef enum PgBackendType
 	PG_STANDALONE_BACKEND,
 	PG_PARALLEL_WORKER,
 	PG_LOGICAL_LAUNCHER,
-	PG_LOGICAL_WORKER
+	PG_LOGICAL_TABLESYNC_WORKER,
+	PG_LOGICAL_APPLY_WORKER,
+	PG_LOGICAL_PARALLEL_WORKER
 } PgBackendType;
 
 #define UNKNOWN_NAME "not initialized"
@@ -40,7 +42,9 @@ typedef enum PgBackendType
 #define STATS_COLLECTOR_PROC_NAME "stats collector"
 #define PARALLEL_WORKER_NAME "parallel worker"
 #define LOGICAL_LAUNCHER_NAME "logical replication launcher"
-#define LOGICAL_WORKER_NAME "logical replication worker"
+#define LOGICAL_TABLESYNC_WORKER_NAME "logical replication tablesync worker"
+#define LOGICAL_APPLY_WORKER_NAME "logical replication apply worker"
+#define LOGICAL_PARALLEL_WORKER_NAME "logical replication parallel worker"
 
 typedef struct {
 	bool available;
