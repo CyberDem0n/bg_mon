@@ -751,8 +751,12 @@ static void merge_stats(pg_stat_activity_list *pg_stats, proc_stat_list proc_sta
 
 #define PARALLEL_WORKER_PROC_NAME PARALLEL_WORKER_NAME " for PID"
 #define LOGICAL_LAUNCHER_PROC_NAME LOGICAL_LAUNCHER_NAME SUFFIX_PATTERN
+#if PG_VERSION_NUM >= 170000
 #define LOGICAL_TABLESYNC_WORKER_PROC_NAME "logical replication tablesync worker for"
-#if PG_VERSION_NUM < 170000
+#else
+#define LOGICAL_TABLESYNC_WORKER_PROC_NAME "logical replication worker for"
+#endif
+#if PG_VERSION_NUM < 160000
 #define LOGICAL_APPLY_WORKER_PROC_NAME "logical replication worker for"
 #else
 #define LOGICAL_APPLY_WORKER_PROC_NAME "logical replication apply worker for"
@@ -815,8 +819,6 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 #endif
 #if PG_VERSION_NUM >= 160000
 			BGWORKER(LOGICAL_PARALLEL_WORKER),
-#endif
-#if PG_VERSION_NUM >= 170000
 			BGWORKER(LOGICAL_TABLESYNC_WORKER),
 #endif
 #if PG_VERSION_NUM < 110000
@@ -834,7 +836,7 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 		for (j = 0; backend_tab[j].name != NULL; ++j)
 			if (strncmp(cmd, backend_tab[j].name, backend_tab[j].name_len) == 0) {
 				*rest = cmd + backend_tab[j].name_len;
-#if PG_VERSION_NUM < 170000
+#if PG_VERSION_NUM < 160000
 				if (backend_tab[j].type == PG_LOGICAL_APPLY_WORKER && strstr(*rest, " sync "))
 					return PG_LOGICAL_TABLESYNC_WORKER;
 #endif
