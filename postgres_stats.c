@@ -816,6 +816,10 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			AUX_BACKEND(STATS_COLLECTOR),
 			AUX_BACKEND(WAL_WRITER),
 			AUX_BACKEND(BG_WRITER),
+#if PG_VERSION_NUM >= 170000
+			AUX_BACKEND(SLOTSYNC_WORKER),
+			AUX_BACKEND(WAL_SUMMARIZER),
+#endif
 			OTH_BACKEND(UNKNOWN),
 			{NULL, 0, PG_UNDEFINED}
 		};
@@ -1011,10 +1015,16 @@ static PgBackendType map_backend_type(BackendType type)
 		case B_STANDALONE_BACKEND:
 			return PG_STANDALONE_BACKEND;
 #endif
+#if PG_VERSION_NUM >= 170000
+		case B_SLOTSYNC_WORKER:
+			return PG_SLOTSYNC_WORKER;
+		case B_WAL_SUMMARIZER:
+			return PG_WAL_SUMMARIZER;
+#endif
 		case B_BG_WORKER:
-		default:
-			return PG_UNDEFINED;
+			break;
 	}
+	return PG_UNDEFINED;
 }
 #endif
 
@@ -1141,7 +1151,9 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 
 	if (init_postgres)
 	{
-#if PG_VERSION_NUM >= 150000
+#if PG_VERSION_NUM >= 170000
+		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, 0, NULL);
+#elif PG_VERSION_NUM >= 150000
 		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, false, false, NULL);
 #elif PG_VERSION_NUM >= 110000
 		InitPostgres("postgres", InvalidOid, NULL, InvalidOid, NULL, false);

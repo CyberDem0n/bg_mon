@@ -74,15 +74,20 @@ bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
     else
         echo "wal_level = 'hot_standby'" >> test_cluster$1/postgresql.conf
     fi
+    if [[ ${version%.*} -ge 17 ]]; then
+        echo "sync_replication_slots = 'on'
+hot_standby_feedback = 'on'
+primary_slot_name = 'standby'
+summarize_wal = 'on'" >> test_cluster$1/postgresql.conf
+    fi
     start_postgres $1
 }
 
 function curl_ps_loop() {
     for a in $(seq 1 $2); do
-        curl -s -H "Accept-Encoding: br" http://localhost:$(($bport+$1)) | brotli -d
-        echo
+        curl -s -H "Accept-Encoding: br" http://localhost:$(($bport+$1)) | brotli -d || true
         sleep 1
-	if [[ ! -z "$3" ]]; then
+        if [[ ! -z "$3" ]]; then
             ps auxwwwf | grep postgres
         fi
     done
@@ -105,13 +110,18 @@ function clone_cluster() {
     mkdir test_cluster$1
     chmod 700 test_cluster1
     if [[ $version =~ ^[1-9][0-9]$ ]]; then opt="-X none"; fi
-    time pg_basebackup $opt -R -c fast -h localhost -p $port -F t -D - | pv -qL 3M | tar -C test_cluster1 -x || true
+    time pg_basebackup $opt --dbname "host=localhost port=$port dbname=postgres" -R -c fast -F t -D - | pv -qL 3M | tar -C test_cluster1 -x || true
     echo "bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
     start_postgres $1
     curl_ps_loop $1 10
 }
 
 create_cluster 0
+
+if [[ ${version%.*} -ge 17 ]]; then
+    psql -h localhost -p $port -d postgres -c "select pg_create_physical_replication_slot('standby')"
+    psql -h localhost -p $port -d postgres -c "select pg_create_logical_replication_slot('failover', 'pgoutput', failover => true)"
+fi
 
 if [[ ${version%.*} -ge 13 ]]; then
     # PROCSIG_BARRIER handling test
