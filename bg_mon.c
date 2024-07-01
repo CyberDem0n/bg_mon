@@ -321,7 +321,9 @@ static const char *process_type(pg_stat_activity p)
 		QUOTE(WAL_SUMMARIZER_PROC_NAME),
 		QUOTE(PARALLEL_WORKER_NAME),
 		QUOTE(LOGICAL_LAUNCHER_NAME),
-		QUOTE(LOGICAL_WORKER_NAME)
+		QUOTE(LOGICAL_TABLESYNC_WORKER_NAME),
+		QUOTE(LOGICAL_APPLY_WORKER_NAME),
+		QUOTE(LOGICAL_PARALLEL_WORKER_NAME)
 	};
 
 	if (p.type == PG_BG_WORKER)
@@ -332,7 +334,7 @@ static const char *process_type(pg_stat_activity p)
 
 static const char *get_query(pg_stat_activity s)
 {
-	if (s.type == PG_LOGICAL_WORKER)
+	if (s.type >= PG_LOGICAL_TABLESYNC_WORKER)
 		return s.ps.cmdline;
 
 	switch (s.state)
