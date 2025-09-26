@@ -161,7 +161,7 @@ if [[ $version =~ ^[1-9][0-9]$ ]]; then
 
     psql -h localhost -p $port -d postgres -c "create table test(id serial not null primary key)"
     psql -h localhost -p $(($port+2)) -d postgres -c "create table test(id serial not null primary key)"
-    psql -h localhost -p $port -d postgres -c "insert into test SELECT generate_series(1, 1000000)"
+    psql -h localhost -p $port -d postgres -c "insert into test SELECT generate_series(1, 3000000)"
     psql -h localhost -p $port -d postgres -c "CREATE PUBLICATION test FOR TABLE test"
     psql -h localhost -p $(($port+2)) -d postgres -c "CREATE SUBSCRIPTION mysub CONNECTION 'host=localhost port=$port dbname=postgres' PUBLICATION test"
 fi

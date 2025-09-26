@@ -683,7 +683,7 @@ static void read_procfs(proc_stat_list *list)
 		if (dp->d_name[0] >= '1' && dp->d_name[0] <= '9'
 				&& (pid = strtoul(dp->d_name, &endptr, 10)) > 0
 				&& endptr > dp->d_name && *endptr == '\0'
-				&& pid != MyProcPid) { // skip themself
+				/*&& pid != MyProcPid*/) { /* skip themself */
 					size_t pid_len = endptr - dp->d_name;
 					proc_file[5] = '/';
 					memcpy(proc_file + 6, dp->d_name, pid_len);
@@ -833,6 +833,10 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			AUX_BACKEND(SLOTSYNC_WORKER),
 			AUX_BACKEND(WAL_SUMMARIZER),
 #endif
+#if PG_VERSION_NUM >= 180000
+			BGWORKER(IO_WORKER),
+			OTH_BACKEND(DEAD_END_BACKEND),
+#endif
 			OTH_BACKEND(UNKNOWN),
 			{NULL, 0, PG_UNDEFINED}
 		};
@@ -888,7 +892,7 @@ static void read_proc_cmdline(pg_stat_activity *stat)
 					rest += len + 1;
 			}
 			stat->query = json_escape_string(rest);
-		} else if ((type >= PG_LOGICAL_TABLESYNC_WORKER || type == PG_BG_WORKER) && *rest)
+		} else if ((type >= PG_LOGICAL_TABLESYNC_WORKER || type == PG_BG_WORKER || type == PG_IO_WORKER) && *rest)
 			stat->ps.cmdline = json_escape_string_len(rest, strlen(rest) - sizeof(SUFFIX_PATTERN));
 		else if (type == PG_PARALLEL_WORKER && *rest)
 			stat->parent_pid = strtoul(rest, NULL, 10);
@@ -1001,12 +1005,20 @@ static PgBackendType map_backend_type(BackendType type)
 			return PG_AUTOVAC_WORKER;
 		case B_BACKEND:
 			return PG_BACKEND;
+#if PG_VERSION_NUM >= 180000
+		case B_DEAD_END_BACKEND:
+			return PG_DEAD_END_BACKEND;
+#endif
 /*		case B_BG_WORKER:
 			return PG_BG_WORKER;*/
 		case B_BG_WRITER:
 			return PG_BG_WRITER;
 		case B_CHECKPOINTER:
 			return PG_CHECKPOINTER;
+#if PG_VERSION_NUM >= 180000
+		case B_IO_WORKER:
+			return PG_IO_WORKER;
+#endif
 		case B_STARTUP:
 			return PG_STARTUP;
 		case B_WAL_RECEIVER:
@@ -1074,7 +1086,7 @@ static void get_pg_stat_activity(pg_stat_activity_list *pg_stats)
 #else
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(i);
 #endif
-		if (beentry && beentry->st_procpid != MyProcPid)
+		if (beentry/* && beentry->st_procpid != MyProcPid */) /* skip themself */
 		{
 			pg_stat_activity ps = {beentry->st_procpid, 0,};
 #if PG_VERSION_NUM >= 90600

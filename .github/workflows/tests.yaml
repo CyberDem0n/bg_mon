@@ -39,6 +39,8 @@ jobs:
           os: ubuntu-24.04
         - postgres-version: '17'
           os: ubuntu-22.04
+        - postgres-version: '18'
+          os: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4

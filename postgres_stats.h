@@ -8,9 +8,11 @@ typedef enum PgBackendType
 	PG_AUTOVAC_LAUNCHER,
 	PG_AUTOVAC_WORKER,
 	PG_BACKEND,
+	PG_DEAD_END_BACKEND,
 	PG_BG_WORKER,
 	PG_BG_WRITER,
 	PG_CHECKPOINTER,
+	PG_IO_WORKER,
 	PG_STARTUP,
 	PG_WAL_RECEIVER,
 	PG_WAL_SENDER,
@@ -32,11 +34,13 @@ typedef enum PgBackendType
 #define AUTOVAC_LAUNCHER_PROC_NAME "autovacuum launcher"
 #define AUTOVAC_WORKER_PROC_NAME "autovacuum worker"
 #define BACKEND_PROC_NAME "backend"
+#define DEAD_END_BACKEND_PROC_NAME "dead-end client backend"
 #define STANDALONE_BACKEND_PROC_NAME "standalone backend"
 #define SLOTSYNC_WORKER_PROC_NAME "slotsync worker"
 #define WAL_SUMMARIZER_PROC_NAME "walsummarizer"
 #define BG_WRITER_NAME "bgwriter"
 #define CHECKPOINTER_PROC_NAME "checkpointer"
+#define IO_WORKER_PROC_NAME "io worker"
 #define STARTUP_PROC_NAME "startup"
 #define WAL_RECEIVER_NAME "walreceiver"
 #define WAL_SENDER_NAME "walsender"
