@@ -647,8 +647,7 @@ system_stat get_system_stats(void)
 	}
 	else if (cgroup2 != NULL)
 	{
-		strcpy(pressure_loc, cgroup2);
-		pressure_len = cgroup2_len;
+		strncpy(pressure_loc, cgroup2, pressure_len = cgroup2_len);
 		system_stats.pressure = read_pressure((pressure *) &system_stats.p_cpu, CPU, true);
 		system_stats.pressure |= read_pressure((pressure *) &system_stats.p_memory, MEMORY, true);
 		system_stats.pressure |= read_pressure((pressure *) &system_stats.p_io, IO, true);
