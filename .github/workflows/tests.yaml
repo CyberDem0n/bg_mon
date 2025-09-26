@@ -71,25 +71,8 @@ jobs:
         PATH=/usr/lib/postgresql/$PG/bin:$PATH bash -x test.sh
         if grep -E '(ERROR|FATAL)' test_cluster?/pg_log/postgresql.log | grep -Ev '(no COPY in progress|could not connect to|could not send|the database system is not yet accepting connections|database system is shutting|error reading result of streaming command|database system is starting up|log:noisia|terminating connection due to administrator command)'; then exit 1; fi
 
-    - name: Generate lcov.info
-      run: |
-        gcov -lr *.[ch]
-        lcov --capture --directory . --no-external -o lcov.info
-
-    - name: Coveralls Parallel
-      uses: coverallsapp/github-action@master
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v5
       with:
-        path-to-lcov: lcov.info
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        flag-name: ${{ matrix.postgres-version }}
-        parallel: true
-
-  finish:
-    needs: tests
-    runs-on: ubuntu-latest
-    steps:
-    - name: Coveralls Finished
-      uses: coverallsapp/github-action@master
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        parallel-finished: true
+        token: ${{ secrets.CODECOV_TOKEN }}
+        flags: ${{ matrix.postgres-version }}
