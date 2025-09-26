@@ -1,4 +1,4 @@
-[![Build Status](https://github.com/CyberDem0n/bg_mon/actions/workflows/tests.yaml/badge.svg)](https://github.com/CyberDem0n/bg_mon/actions/workflows/tests.yaml) [![Coverage Status](https://coveralls.io/repos/github/CyberDem0n/bg_mon/badge.svg?branch=master)](https://coveralls.io/github/CyberDem0n/bg_mon?branch=master)
+[![Build Status](https://github.com/CyberDem0n/bg_mon/actions/workflows/tests.yaml/badge.svg)](https://github.com/CyberDem0n/bg_mon/actions/workflows/tests.yaml) [![codecov](https://codecov.io/gh/CyberDem0n/bg_mon/graph/badge.svg?token=IS7CWT9FOM)](https://codecov.io/gh/CyberDem0n/bg_mon)
 
 Background worker for monitoring PostgreSQL
 ===========================================
@@ -6,7 +6,7 @@ Background worker for monitoring PostgreSQL
 bg\_mon is a contrib module compatible with PostgreSQL starting from version 9.3
 It collects per-process statistics combined with `pg_stat_activity` for the processes that have the rows there, global system stats, per-partition information and the memory stats.
 
-Monitoring is being done from the [Background Worker Process](http://www.postgresql.org/docs/9.3/static/bgworker.html) and results are exposed by embeded webserver implemented with the help of [libevent](http://libevent.org/) library.
+Monitoring is being done from the [Background Worker Process](http://www.postgresql.org/docs/current/bgworker.html) and results are exposed by embeded webserver implemented with the help of [libevent](http://libevent.org/) library.
 
 By default webserver listen on `127.0.0.1:8080` and statistics is collected every second. Optionally, if compiled with libbrotli, the worker will keep statistics in the aggregated format for the past `history_buckets` minutes in memory. Brotli compression is used because the compression ratio is very efficient and most of the modern browsers support it out of the box.
 
