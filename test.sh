@@ -70,6 +70,7 @@ bg_mon.port = $(($bport+$1))" >> test_cluster$1/postgresql.conf
         echo "cluster_name = ' bgworker: \"test cluster$1\" '" >> test_cluster$1/postgresql.conf
     fi
     if [ $version != "9.3" ]; then
+        echo "max_worker_processes = 16" >> test_cluster$1/postgresql.conf
         echo "wal_level = 'logical'" >> test_cluster$1/postgresql.conf
     else
         echo "wal_level = 'hot_standby'" >> test_cluster$1/postgresql.conf
@@ -159,11 +160,27 @@ if [[ $version =~ ^[1-9][0-9]$ ]]; then
     create_cluster 2
     run_bg curl_ps_loop 2 30
 
-    psql -h localhost -p $port -d postgres -c "create table test(id serial not null primary key)"
-    psql -h localhost -p $(($port+2)) -d postgres -c "create table test(id serial not null primary key)"
+    if [ $version -ge 19 ]; then
+        (
+            psql -h localhost -p $(($port+2)) -d postgres -c "create table test2(id int not null)"
+            psql -h localhost -p $(($port+2)) -d postgres -c "insert into test2 SELECT generate_series(1, 3000000)"
+            psql -h localhost -p $(($port+2)) -d postgres -c "alter table test2 add constraint test2_id primary key (id)"
+            psql -h localhost -p $(($port+2)) -d postgres -c "SELECT pg_catalog.pg_disable_data_checksums()"
+        ) &
+        checksums_pid=$!
+    fi
+
+    psql -h localhost -p $port -d postgres -c "create table test(id int not null)"
     psql -h localhost -p $port -d postgres -c "insert into test SELECT generate_series(1, 3000000)"
+    psql -h localhost -p $port -d postgres -c "alter table test add constraint test_id primary key (id)"
+    psql -h localhost -p $(($port+2)) -d postgres -c "create table test(id serial not null primary key)"
     psql -h localhost -p $port -d postgres -c "CREATE PUBLICATION test FOR TABLE test"
     psql -h localhost -p $(($port+2)) -d postgres -c "CREATE SUBSCRIPTION mysub CONNECTION 'host=localhost port=$port dbname=postgres' PUBLICATION test"
+
+    if [ $version -ge 19 ]; then
+        wait $checksums_pid
+        psql -h localhost -p $(($port+2)) -d postgres -c "SELECT pg_catalog.pg_enable_data_checksums(2147483647, 1)"
+    fi
 fi
 
 wait ${background_pids[@]}
