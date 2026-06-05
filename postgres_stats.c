@@ -785,6 +785,11 @@ static void merge_stats(pg_stat_activity_list *pg_stats, proc_stat_list proc_sta
 	#define CMDLINE_PATTERN(TYPE) CMDLINE(TYPE)
 	#define BGWORKER(TYPE) OTH_BACKEND(TYPE)
 #endif
+#if PG_VERSION_NUM < 190000
+	#define LOGGER_PROC_NAME "logger"
+#else
+	#define LOGGER_PROC_NAME LOGGER_NAME
+#endif
 #define AUX_BACKEND(TYPE) BACKEND_ENTRY(CMDLINE_PATTERN(TYPE) SUFFIX_PATTERN, TYPE)
 
 #if PG_VERSION_NUM >= 160000
@@ -836,6 +841,10 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 #if PG_VERSION_NUM >= 180000
 			BGWORKER(IO_WORKER),
 			OTH_BACKEND(DEAD_END_BACKEND),
+#endif
+#if PG_VERSION_NUM >= 190000
+			BGWORKER(DATACHECKSUMSWORKER_LAUNCHER),
+			BGWORKER(DATACHECKSUMSWORKER_WORKER),
 #endif
 			OTH_BACKEND(UNKNOWN),
 			{NULL, 0, PG_UNDEFINED}
@@ -1015,6 +1024,12 @@ static PgBackendType map_backend_type(BackendType type)
 			return PG_BG_WRITER;
 		case B_CHECKPOINTER:
 			return PG_CHECKPOINTER;
+#if PG_VERSION_NUM >= 190000
+		case B_DATACHECKSUMSWORKER_LAUNCHER:
+			return PG_DATACHECKSUMSWORKER_LAUNCHER;
+		case B_DATACHECKSUMSWORKER_WORKER:
+			return PG_DATACHECKSUMSWORKER_WORKER;
+#endif
 #if PG_VERSION_NUM >= 180000
 		case B_IO_WORKER:
 			return PG_IO_WORKER;

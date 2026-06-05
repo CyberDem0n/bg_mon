@@ -22,6 +22,9 @@
 #include "utils/datetime.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
+#if PG_VERSION_NUM >= 140000
+#include "utils/wait_event.h"
+#endif
 
 #include "safety_funcs.h"
 #include "net_stats.h"
@@ -254,7 +257,7 @@ bg_mon_sighup(SIGNAL_ARGS)
 }
 
 static void
-initialize_bg_mon()
+initialize_bg_mon(void)
 {
 	postgres_stats_init();
 	disk_stats_init();
@@ -310,6 +313,8 @@ static const char *process_type(pg_stat_activity p)
 		NULL,
 		QUOTE(BG_WRITER_NAME),
 		QUOTE(CHECKPOINTER_PROC_NAME),
+		QUOTE(DATACHECKSUMSWORKER_LAUNCHER_PROC_NAME),
+		QUOTE(DATACHECKSUMSWORKER_WORKER_PROC_NAME),
 		QUOTE(IO_WORKER_PROC_NAME),
 		QUOTE(STARTUP_PROC_NAME),
 		QUOTE(WAL_RECEIVER_NAME),
@@ -317,7 +322,7 @@ static const char *process_type(pg_stat_activity p)
 		QUOTE(WAL_WRITER_NAME),
 		QUOTE(ARCHIVER_PROC_NAME),
 		QUOTE(STATS_COLLECTOR_PROC_NAME),
-		QUOTE(LOGGER_PROC_NAME),
+		QUOTE(LOGGER_NAME),
 		QUOTE(STANDALONE_BACKEND_PROC_NAME),
 		QUOTE(SLOTSYNC_WORKER_PROC_NAME),
 		QUOTE(WAL_SUMMARIZER_PROC_NAME),

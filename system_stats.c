@@ -33,7 +33,7 @@ static char *nodename = NULL;
 
 system_stat system_stats_old;
 
-static unsigned long long proc_read_uptime()
+static unsigned long long proc_read_uptime(void)
 {
 	unsigned long long ret = 0;
 	unsigned long sec, cent;
@@ -63,7 +63,7 @@ static int proc_read_int(const char *name)
  * kernel 4.20 it should manifest itself via /proc/pressure directory in procfs
  * with cpu,memory,io files.
  */
-static bool pressure_available()
+static bool pressure_available(void)
 {
 	struct stat sb;
 	int res;
@@ -580,7 +580,7 @@ static system_stat read_proc_stat(void)
 	return st;
 }
 
-static char *get_hostname()
+static char *get_hostname(void)
 {
 	struct utsname un;
 	if (uname(&un) == 0 && (nodename == NULL || strcmp(nodename, un.nodename))) {

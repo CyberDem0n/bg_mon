@@ -153,7 +153,7 @@ static bool is_remote(struct mntent *me)
 				|| strcmp(me->mnt_type, "cifs") == 0)));
 }
 
-static List *read_mounts()
+static List *read_mounts(void)
 {
 	List *mounts = NIL;
 	struct mntent *me;

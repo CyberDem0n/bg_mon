@@ -12,6 +12,8 @@ typedef enum PgBackendType
 	PG_BG_WORKER,
 	PG_BG_WRITER,
 	PG_CHECKPOINTER,
+	PG_DATACHECKSUMSWORKER_LAUNCHER,
+	PG_DATACHECKSUMSWORKER_WORKER,
 	PG_IO_WORKER,
 	PG_STARTUP,
 	PG_WAL_RECEIVER,
@@ -40,13 +42,15 @@ typedef enum PgBackendType
 #define WAL_SUMMARIZER_PROC_NAME "walsummarizer"
 #define BG_WRITER_NAME "bgwriter"
 #define CHECKPOINTER_PROC_NAME "checkpointer"
+#define DATACHECKSUMSWORKER_LAUNCHER_PROC_NAME "datachecksum launcher"
+#define DATACHECKSUMSWORKER_WORKER_PROC_NAME "datachecksum worker"
 #define IO_WORKER_PROC_NAME "io worker"
 #define STARTUP_PROC_NAME "startup"
 #define WAL_RECEIVER_NAME "walreceiver"
 #define WAL_SENDER_NAME "walsender"
 #define WAL_WRITER_NAME "walwriter"
 #define ARCHIVER_PROC_NAME "archiver"
-#define LOGGER_PROC_NAME "logger"
+#define LOGGER_NAME "syslogger"
 #define STATS_COLLECTOR_PROC_NAME "stats collector"
 #define PARALLEL_WORKER_NAME "parallel worker"
 #define LOGICAL_LAUNCHER_NAME "logical replication launcher"
