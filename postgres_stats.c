@@ -842,10 +842,6 @@ static PgBackendType parse_cmdline(const char * const buf, const char **rest)
 			BGWORKER(IO_WORKER),
 			OTH_BACKEND(DEAD_END_BACKEND),
 #endif
-#if PG_VERSION_NUM >= 190000
-			BGWORKER(DATACHECKSUMSWORKER_LAUNCHER),
-			BGWORKER(DATACHECKSUMSWORKER_WORKER),
-#endif
 			OTH_BACKEND(UNKNOWN),
 			{NULL, 0, PG_UNDEFINED}
 		};
@@ -1024,12 +1020,6 @@ static PgBackendType map_backend_type(BackendType type)
 			return PG_BG_WRITER;
 		case B_CHECKPOINTER:
 			return PG_CHECKPOINTER;
-#if PG_VERSION_NUM >= 190000
-		case B_DATACHECKSUMSWORKER_LAUNCHER:
-			return PG_DATACHECKSUMSWORKER_LAUNCHER;
-		case B_DATACHECKSUMSWORKER_WORKER:
-			return PG_DATACHECKSUMSWORKER_WORKER;
-#endif
 #if PG_VERSION_NUM >= 180000
 		case B_IO_WORKER:
 			return PG_IO_WORKER;
