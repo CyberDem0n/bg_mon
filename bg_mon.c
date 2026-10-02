@@ -777,7 +777,9 @@ restart:
 
 	pthread_create(&thread, NULL, webapi, base);
 
-	gettimeofday(&next_run, &tz);
+	gettimeofday(&current_time, &tz);
+	next_run = current_time;
+	next_run.tv_sec += bg_mon_naptime_guc;
 
 	/*
 	 * Main loop: do this until the SIGTERM handler tells us to terminate
@@ -785,10 +787,6 @@ restart:
 	while (!got_sigterm) {
 		int		rc;
 		double	naptime;
-
-		next_run.tv_sec += bg_mon_naptime_guc; /* adjust wakeup target time */
-
-		gettimeofday(&current_time, &tz);
 
 		naptime = 1000L * (
 			(double)next_run.tv_sec + (double)next_run.tv_usec/1000000.0 -
@@ -842,7 +840,15 @@ restart:
 			}
 		}
 
-		update_statistics(next_run);
+		gettimeofday(&current_time, &tz);
+		/* Ignore latch wakeups before the scheduled statistics update. */
+		if (current_time.tv_sec < next_run.tv_sec ||
+			(current_time.tv_sec == next_run.tv_sec && current_time.tv_usec < next_run.tv_usec))
+			continue;
+
+		update_statistics(current_time);
+		gettimeofday(&current_time, &tz);
+		next_run.tv_sec += bg_mon_naptime_guc;
 	}
 
 	proc_exit(1);
